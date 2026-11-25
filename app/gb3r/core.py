@@ -18,7 +18,7 @@ import time
 from . import gdat
 
 APP_NAME = 'Recompiler Gundam Breaker 3 Break Edition'
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.1.0'
 TITLE = 'CUSA07651'
 SAVE_TITLE = 'CUSA03489'
 

@@ -1,5 +1,13 @@
 # Recompiler Gundam Breaker 3 Break Edition
 
+<a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
+**How to play:** you need your own GUNDAM BREAKER 3 BREAK EDITION **base game, CUSA07651 v01.00**,
+as a fake-signed `.pkg` or a dumped `CUSA07651` folder (not an update PKG). Download
+`GB3-Recompiler-v…-Linux-x86_64.AppImage` from [Releases](https://github.com/Jazzneo/gb3-recompiler/releases),
+run it, pick your PKG, press **Install**, then **Play**. In RecompLauncher, drop the PKG or folder on
+the setup screen instead.
+
 One AppImage that turns **your own** GUNDAM BREAKER 3 BREAK EDITION PS4 PKG (CUSA07651, v01.00)
 into a playable Linux / Steam Deck install. It runs the game through
 [psport](https://github.com/yerasuu/psport), a PS4 translation layer (the game's own x86-64 code
@@ -28,8 +36,8 @@ menu banners, and the PS4 pad pictures on loading screens.
 
 1. Make it executable and start it (Desktop Mode on a Deck):
    ```bash
-   chmod +x Recompiler_Gundam_Breaker_3_Break_Edition-x86_64.AppImage
-   ./Recompiler_Gundam_Breaker_3_Break_Edition-x86_64.AppImage
+   chmod +x GB3-Recompiler-v*-Linux-x86_64.AppImage
+   ./GB3-Recompiler-v*-Linux-x86_64.AppImage
    ```
 2. **1** — pick your PKG (**Browse…** or **Find**) and an install folder. Default
    `~/Games/GB3-Recompiler`; it needs about 14 GB. A microSD works.
@@ -38,6 +46,15 @@ menu banners, and the PS4 pad pictures on loading screens.
 5. **Play**, or for Game Mode: Steam → *Add a Non-Steam Game* → tick
    **GUNDAM BREAKER 3 (psport)** (the installer adds that menu entry; it runs `play.sh` in the
    install folder).
+
+### RecompLauncher
+
+The release carries `recomplauncher.json` (inside the AppImage at `/recomplauncher.json`, and at the
+top of the `.tar.xz`). The launcher's setup step runs
+`--prepare --game=<your PKG or folder> --dir <game folder>/recompdata/GB3-Recompiler`, with the
+720p and Xbox-art fixes as ticks; Play runs `--play --dir …`, and its Frame rate and Background
+shader compiles settings are passed on the command line. Saves are in
+`recompdata/GB3-Recompiler/psport-bundle/user/savedata`, logs in `recompdata/logs`.
 
 Already playing with an older psport bundle? **Import old saves** copies
 `~/Applications/Psport/psport-bundle/user/savedata/1/CUSA03489` (or a folder you pick) into the
@@ -58,12 +75,14 @@ In game, **F1** opens the psport menu (quit, settings).
 ## Command line
 
 ```bash
-./Recompiler…AppImage install --pkg game.pkg [--dir DIR] [--no-xbox] [--no-720p] [--fps 30|60|uncapped]
-./Recompiler…AppImage apply [--xbox|--no-xbox] [--720p|--no-720p]
-./Recompiler…AppImage restore
-./Recompiler…AppImage status
-./Recompiler…AppImage import-saves [--from OLD_BUNDLE]
-./Recompiler…AppImage --play            # start the installed game
+./GB3-Recompiler…AppImage install --pkg game.pkg [--dir DIR] [--no-xbox] [--no-720p] [--fps 30|60|uncapped]
+./GB3-Recompiler…AppImage apply [--xbox|--no-xbox] [--720p|--no-720p]
+./GB3-Recompiler…AppImage restore
+./GB3-Recompiler…AppImage status
+./GB3-Recompiler…AppImage import-saves [--from OLD_BUNDLE]
+./GB3-Recompiler…AppImage --play [--dir DIR] [--60|--uncap|--async]   # start the installed game
+./GB3-Recompiler…AppImage --prepare --game=PKG_OR_FOLDER --dir DIR [--xbox] [--720p]
+                                       # windowless setup with "progress 0.4 Text" lines
 bash ~/Games/GB3-Recompiler/play.sh --check   # what psport would use, launches nothing
 ```
 
@@ -87,7 +106,7 @@ Debug logs: `~/Games/PS4/psport-debug/<host>/<time>-CUSA07651/` (`run.log`, `fau
 ```bash
 python3 tools/make-patchdata.py --a000 <original 000.dat> --a001 <original 001.dat> \
     --scope ../GB3-Port-Scope --out data          # only when a mod changes
-bash packaging/build-appimage.sh                  # -> dist/*.AppImage
+bash packaging/build-appimage.sh                  # -> dist/GB3-Recompiler-v<ver>-Linux-x86_64.{AppImage,tar.xz}
 ```
 
 `build-appimage.sh` stages the runtime from `GB3-Port-Scope` (patched `out/psport`, the box-fix

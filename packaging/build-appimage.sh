@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Build dist/Recompiler_Gundam_Breaker_3_Break_Edition-x86_64.AppImage
+# Build the release files (the same folder packed two ways, RecompLauncher's naming):
+#   dist/GB3-Recompiler-v<version>-Linux-x86_64.AppImage
+#   dist/GB3-Recompiler-v<version>-Linux-x86_64.tar.xz   (top folder GB3-Recompiler-v<version>/)
+# Both carry recomplauncher.json at the top (the AppImage at /recomplauncher.json).
 #
 #   bash packaging/build-appimage.sh
 #
@@ -44,16 +47,21 @@ pod start gb3r-build >/dev/null
 pod exec gb3r-build bash -c 'rpm -q squashfs-tools python3-tkinter >/dev/null 2>&1 ||
     dnf install -y -q --setopt=install_weak_deps=False squashfs-tools python3 python3-tkinter binutils'
 pod exec gb3r-build bash /w/packaging/bundle-python.sh /w/build/AppDir
-cp packaging/AppRun packaging/gb3-recompiler.desktop packaging/gb3-recompiler.svg build/AppDir/
+cp packaging/AppRun packaging/gb3-recompiler.desktop packaging/gb3-recompiler.svg recomplauncher.json build/AppDir/
 cp packaging/gb3-recompiler.svg build/AppDir/.DirIcon
 chmod +x build/AppDir/AppRun
+ver=$(sed -n "s/^APP_VERSION = '\(.*\)'/\1/p" app/gb3r/core.py)
 mkdir -p dist
-out=dist/Recompiler_Gundam_Breaker_3_Break_Edition-x86_64.AppImage
+name=GB3-Recompiler-v$ver-Linux-x86_64
+out=dist/$name.AppImage
 pod exec gb3r-build bash -c 'rm -f /w/build/app.squashfs && mksquashfs /w/build/AppDir /w/build/app.squashfs \
     -comp zstd -Xcompression-level 19 -root-owned -noappend -quiet -no-progress'
 cat "$rt" build/app.squashfs > "$out.tmp"
 chmod +x "$out.tmp"
 mv "$out.tmp" "$out"
 rm -f build/app.squashfs
-ls -la "$out"
-sha256sum "$out" | tee "$out.sha256"
+# The tarball: the same AppDir under one top folder; it runs from wherever it is unpacked (AppRun).
+rm -f "dist/$name.tar.xz"
+tar -C build --transform "s,^AppDir,GB3-Recompiler-v$ver," --owner=0 --group=0 -cf - AppDir | xz -T0 -6 > "dist/$name.tar.xz"
+ls -la "$out" "dist/$name.tar.xz"
+( cd dist && sha256sum "$name.AppImage" "$name.tar.xz" | tee "$name.sha256" )

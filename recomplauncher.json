@@ -1,0 +1,79 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Recompiler Gundam Breaker 3 Break Edition",
+  "repo": "Jazzneo/gb3-recompiler",
+  "inputs": [
+    {
+      "id": "game",
+      "role": "game",
+      "label": "Your GUNDAM BREAKER 3 BREAK EDITION base game, CUSA07651 v01.00: the fake-signed .pkg, or the dumped CUSA07651 folder. Not an update PKG.",
+      "formats": [
+        { "type": "file", "extensions": ["pkg"] },
+        { "type": "folder" }
+      ],
+      "check": { "file": "eboot.bin", "ids": ["CUSA07651"] }
+    }
+  ],
+  "prepare": {
+    "program": ["GB3-Recompiler-Linux-x86_64.AppImage", "AppRun"],
+    "args": ["--prepare", "--game={input:game}", "--dir", "{data}/GB3-Recompiler"],
+    "label": "Unpacking your game and applying the fixes",
+    "done": ["{data}/GB3-Recompiler/play.sh", "{data}/GB3-Recompiler/CUSA07651/eboot.bin"],
+    "keeps_copy": true,
+    "options": [
+      {
+        "id": "render720",
+        "label": "720p render patch and shader fix",
+        "note": "A steady 30 FPS on Steam Deck. Off renders the stock 1080p (about 25 FPS on a Deck).",
+        "args": ["--720p"]
+      },
+      {
+        "id": "xbox",
+        "label": "Xbox / Steam Deck button art",
+        "note": "A/B/X/Y glyphs, controller pictures, EX prompts and skill-slot badges.",
+        "args": ["--xbox"]
+      }
+    ]
+  },
+  "start": {
+    "program": ["GB3-Recompiler-Linux-x86_64.AppImage", "AppRun"],
+    "args": ["--play", "--dir", "{data}/GB3-Recompiler"],
+    "env": { "PS_DEBUG_DIR": "{data}/logs" }
+  },
+  "settings": [
+    {
+      "id": "fps",
+      "label": "Frame rate",
+      "help": "30 is the PS4's pace. Higher rates lift the game's frame lock; animations or physics may run fast.",
+      "in": "args",
+      "choices": [
+        { "label": "30 (PS4)", "args": [] },
+        { "label": "60", "args": ["--60"] },
+        { "label": "Uncapped", "args": ["--uncap"] }
+      ]
+    },
+    {
+      "id": "async",
+      "label": "Background shader compiles",
+      "help": "Fewer stutters while new shaders build; a draw may be missing for a frame.",
+      "in": "args",
+      "choices": [
+        { "label": "Off", "args": [] },
+        { "label": "On", "args": ["--async"] }
+      ]
+    }
+  ],
+  "saves": ["{data}/GB3-Recompiler/psport-bundle/user/savedata"],
+  "folders": {
+    "game": [{ "path": "{data}/GB3-Recompiler" }],
+    "saves": [{ "path": "{data}/GB3-Recompiler/psport-bundle/user/savedata" }],
+    "logs": [{ "path": "{data}/logs" }]
+  },
+  "actions": [
+    { "id": "logs", "label": "Open Logs", "help": "psport's run logs and fault reports.", "open": "logs" }
+  ],
+  "system": {
+    "linux": { "glibc": "2.34", "graphics": { "vulkan": "1.3" } }
+  }
+}
