@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Recompiler Gundam Breaker 3 Break Edition
+Comment=Install GUNDAM BREAKER 3 BREAK EDITION from your own PS4 PKG and run it through psport
+Exec=AppRun
+Icon=gb3-recompiler
+Terminal=false
+Categories=Game;Utility;

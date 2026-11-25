@@ -1,0 +1,5 @@
+build/
+dist/
+_selftest/
+__pycache__/
+packaging/appimage-runtime-x86_64

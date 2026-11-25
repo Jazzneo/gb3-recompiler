@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GUNDAM BREAKER 3 BREAK EDITION (CUSA07651, APP_VER 01.00): render the game at 1280x720.
+     Patch address = 0x400000 + eboot image VA (file offset = VA + 0x17bb0).
+
+     1-2. Scene render size. The engine's graphics init builds a config on the stack with the display
+          size at +0x6d0 and the render size at +0x6f0 (VA 0x598bda: two `movl` of 1920/1080); only
+          the render size changes, so every scene target is 1280x720 (half-size ones 640x360).
+
+     The game draws its 2D layer (menus, dialogs, subtitles, HUD, logos, movie and event stills)
+     into that same scene target, laid out on a fixed 1920x1080 canvas, but takes its projection
+     and its full-screen quad sizes from the render size. With only lines 1-2 the 2D layer is cut to
+     its top-left 1280x720 and blown up 1.5x. Lines 3-19 put the 1920x1080 canvas back:
+
+     3.   VA 0xd59500 (71 bytes, same control flow): the 2D layer projection built from the render
+          size (gfx+0x20/+0x24) uses 1920x1080 instead (subtitles, HUD).
+     4.   VA 0xd5bdc9 (34 bytes): the 2D layer projection built from the current render target's
+          rectangle scales that size by 1.5 when the target is 1280-1535 wide (dialogs, menus);
+          any other target keeps its own size.
+     5-19. Fifteen readers of the render size that size or place 2D elements (logos and fades, movie
+          and event stills, full-screen overlays, HUD lock-on/target markers, the HUD safe-area rect,
+          a centred HUD element, a second 2D projection at VA 0xad1b18): `mov reg,[rip->gfx object]`
+          becomes `lea reg,[rip->a 1920,1080 pair - 0x20]`, so their +0x20/+0x24 loads read
+          1920x1080. The pair is the immediate of `movabs rax,0x43800000780` at VA 0x8e4058.
+          Readers left alone: light-culling tiles (VA 0xacd4af) and the other 3D users.
+     20-21. v2.2: the world->screen function (VA 0xaf9a50, read at line 13) is shared. Its HUD
+          callers draw on the 1920x1080 canvas, but VA 0xad10e0 turns its result into a 0..1
+          screen position for a hit/weapon screen effect by dividing by the render size, which put
+          that effect 1.5x down and to the right of the weapon at 720p. Its two
+          `vcvtsi2ss xmm1,[gfx+0x20/+0x24]; vdivss` pairs (VA 0xad1149, 0xad1173, 9 bytes each)
+          become `vdivss xmm,xmm0,[rip->1920.0f / 1080.0f]; nop`, float constants already in the
+          eboot (VA 0x2ce62ae, 0x2c6aa54). At 1080p this gives the same result as before.
+     22-23. v2.3: YEBIS light shafts (the glow/rays of beam weapons, bursts and lights such as the
+          hangar globe's). GxSysFilter loops over up to 16 light-shaft sources (VA 0xd8d410) and
+          turns each world position into a screen position with VA 0xd0a290, the engine's
+          world->DISPLAY function (it scales the viewport by display/render size, so its result is
+          on the 1920x1080 display, unlike 0xaf9a50). It then divides that by the viewport size at
+          GxSysFilter+0x510/+0x514, which is the 1280x720 render size, and hands Yebis a 0..1.5
+          position: the rays started 1.5x down and to the right of the light. The two
+          `vcvtsi2ss xmm,[r13+0x510/+0x514]; vdivss` pairs (VA 0xd8d546, 0xd8d565, 13 bytes each)
+          become `vdivss xmm,xmm,[rip->1920.0f / 1080.0f]; 5-byte nop` (the same constants as
+          20-21). xmm1/xmm2 were scratch and are reloaded before use. Same result at 1080p.
+     24.  v2.3, not reported, same family as 5-19: VA 0x75fac0 (a world->screen caller of 0xaf9a50)
+          centres a HUD popup at x = render width * 0.5 on the 1920 canvas when its mode is 2,
+          i.e. at 640 instead of 960. `vcvtsi2ss xmm0,[r15+0x20]; vmulss xmm1,xmm0,[0.5]`
+          (VA 0x75fb2d, 14 bytes) becomes `vmovss xmm1,[rip->960.0f at VA 0x2c6cbf8]; 6-byte nop`.
+          r15 is still the gfx object there (it is also read at +0x40), so no lea redirect.
+     25-26. v2.3, not reported, same pattern as 5-19 (`lea` to the 1920,1080 pair): hangar UI
+          layout rects built on the canvas from the render width: the shop detail window's info
+          text width (VA 0x92d4d5) and the menu header title rect (VA 0x93cedb). Both store a
+          {x, y, w, h} canvas rect in a UI node (+0x58, flag +0x68), so at 720p they were 2/3
+          wide (text wrapped/clipped early).
+     Checked and left alone (render size is right there): post/full-screen effect UVs
+     (0xac68b4, 0xac6ba6, 0xacfcdf, 0xad08a2), Mizuchi scene size (0xdbae86), SpriteStudio
+     scissors in target pixels (0xc8b770, 0xc8de70), screen->ray picking (0xb0647e, it goes
+     through 0xd0adf0 which converts to display itself), BISHAMON effects and their distortion
+     buffer and YEBIS buffers (all take the render-size viewport at gfx+0x40 -> +0x20/+0x24).
+
+     The 2D layer is therefore drawn at 720p and scaled up with the scene; on a 1280x800 Deck panel
+     that is no loss. Only valid for a 1280..1535-wide render size (line 4's test).
+
+     v2.4 (2026-11-24): the eboot writes are unchanged from v2.3 (an audit of every display/render
+     size reader found nothing else mixed, see render-720p/audit-1080p-readers.md). The remaining
+     weapon-glow and hangar-globe misplacement comes from GAME SHADERS that hard-code the 1920x1080
+     frame, which an eboot patch cannot reach: motionBlurApply builds its tile-lookup UV as
+     (pixel+0.5)*(1/1920,1/1080), so the blur of anything moving (beam sabers, slashes, the spinning
+     globe) used the velocity of the point at 2/3 of its position and smeared 1.5x down-right.
+     render-720p/shader-mod/mod.py rewrites those constants (motion blur x5, optical camouflage,
+     aura, menu background blur) in masterPS4/GxArchivedFile001.dat. Install BOTH; to go back to
+     1080p remove this XML AND run `mod.py restore`.
+
+     v2.5 (2026-11-25, static analysis of the Deck frame capture; first run on the Deck: see v2.5.1).
+     27-28. The particle/effect pass (BISHAMON effects: hangar holograms, beam glows) drew with a
+          1920x1080 viewport into the 1280x720 effect buffer, so every effect was a sharp copy at
+          1.5x position and size from the top-left. Its viewport is not one of lines 5-19: the
+          effect module (VA 0xc57xxx/0xc58xxx) queues a callback, VA 0xc5b0f0, that sets the render
+          device's viewport (VA 0x20b7f0) to entry `idx` of a static table {1920x1080, 1366x768,
+          960x540} at 0x32f81f0, filled by a global constructor at VA 0xc5a464. Entry 0 is the
+          full-size pass (the path at 0xc57f12 always passes 0), whose target is the scene-size
+          buffer; entries 1-2 size their own fixed targets (0xc57bb2/0xc57c64), so they stay. Only
+          0xc5b0f0 reads entry 0. The two `movl` immediates (VA 0xc5a46a, 0xc5a474) become 1280, 720.
+     10.  (rewritten) Menu background-blur overlay (VA 0xace195): the quad needs the canvas size but
+          its UV is render size / blur texture size, and v2's redirect gave both 1920x1080, so the
+          image showed at 2/3. Now: UV = real gfx +0x20/+0x24 / texture +0x34/+0x38, computed at
+          VA 0xace195 (59 bytes) and stored where the old code kept the texture size; the quad
+          corners come from the 1920.0f/1080.0f constants of lines 20-23 (line 29, VA 0xace21c,
+          32 bytes, the four reloads before the vertex writes). No other use of those stack slots.
+     v2.5.1 (2026-11-25): v2.5 without its lines 30-32 (SpriteStudio clip). 29 writes. v2.5 crashed
+          on entering the lobby (guest SIGSEGV at VA 0xd54afc, [rdi+0x38] with rdi = NULL, return
+          VA 0xc8db30). Cause: line 32 rewrote the 107 bytes that hold the original `mov rax,fs:[0]`
+          thread-pointer loads and wrote a new one. psport rewrites every `mov r64,fs:[0]` in the
+          image to GS (guest TCB) at load time, BEFORE the patches are applied, so the patched-in
+          load read the host's FS instead and the TLS-slot pointer (`this` of GxPrimitiveManager)
+          came out NULL. Rule for every write in this file: never write `64 48/4c 8b ?4 25 00000000`
+          and never overwrite one. On the Deck v2.5.1 fixes the holograms, beam glow and menu blur;
+          only the SpriteStudio menu text clip is left (text spills past its panel).
+     v2.6 (2026-11-25, static analysis only). 33 writes = v2.5.1 + four. The SpriteStudio clip fix
+     redone without touching either thread-pointer load:
+     30-33. Clip rects of SpriteStudio UI (scrolling lists, ability text). SpriteStudio stores a
+          node's clip rect (canvas units, int {x0,y0,x1,y1}, node +0x58/+0x68) with each draw and
+          hands it to GxPrimitiveManager's only scissor entry (VA 0xd54ae0) from VA 0xc8db38; the
+          2D pass (VA 0xd5a7d2) sets it as the GPU scissor in target pixels, so at 720p it clipped
+          on canvas numbers (panel edge 1230 instead of 820). Original code: the rect is in xmm0 on
+          both branches (unscrolled: loaded at VA 0xc8da84; scrolled: scroll applied, ends at
+          VA 0xc8daca); scrolled stores it at [rbp-0x70], spills the float arg [r15+0x1fc] to
+          [rbp-0xc8], loads `this` from TLS (VA 0xc8dae0) and jumps to VA 0xc8db30; unscrolled
+          (VA 0xc8dafe) stores at [rbp-0x80], spills the same float, loads `this` from TLS
+          (VA 0xc8db14), edx = -1, rsi = rbp-0x80, reloads the float and calls.
+          Line 32 (VA 0xc8daca, 22 bytes) replaces the scrolled branch's stores with
+          `vcvtdq2ps xmm0,xmm0; vbroadcastss xmm1,[2/3 @0x2bc76e8]; vmulps xmm0,xmm0,xmm1;
+          vcvtps2dq xmm0,xmm0; nop` and falls into the ORIGINAL TLS load at 0xc8dae0 (unchanged
+          bytes). Line 33 (VA 0xc8daf3) `jmp 0xc8dafe`: from there the unscrolled branch's original
+          bytes run unchanged to the call (store at [rbp-0x80], float spill, its own original TLS
+          load, edx, rsi, float reload). Line 31 (VA 0xc8da89, `74 3f`) sends the unscrolled branch
+          to line 32 first. So both branches scale the rect by 2/3 and then execute exactly the
+          original call sequence; rdi comes from the untouched, psport-rewritten load at 0xc8db14
+          (the one at 0xc8dae0 also runs on both paths and gives the same value). xmm1 is dead there
+          (the callee writes it before reading). int32*2/3 cannot overflow int32, so no clamp;
+          1920x1080 maps to exactly 1280x720. [rbp-0x70] is no longer written; nothing else in the
+          function reads it.
+          Line 30 (VA 0xc8b770, `lea` to the 1920,1080 pair like 5-19): the default clip a node gets
+          without its own rect was {0,0,render size}, which would scale to 853x480; now it is the
+          canvas and scales to the full 1280x720 target. rax is only read at +0x20/+0x24 there.
+          The scissor reset after each SpriteStudio draw (VA 0xc8de70, render size, target pixels,
+          its own TLS load) is unchanged. Limitation: a SpriteStudio draw into an offscreen target
+          would get the 2/3 scale too.
+     These assume the 1280x720 render size of lines 1-2 (fixed 1.5 ratio), like line 4. -->
+<Patch>
+  <TitleID>
+    <ID>CUSA07651</ID>
+  </TitleID>
+  <Metadata Title="GUNDAM BREAKER 3 BREAK EDITION" Name="Scene render size 1280x720" Note="3D scene and 2D layer at 1280x720, laid out on the game's 1920x1080 canvas. v2.4+: install shader-mod/mod.py too." Author="local" PatchVer="2.6" AppVer="01.00" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x998be1" Value="00050000"/>
+      <Line Type="bytes" Address="0x998bec" Value="d0020000"/>
+      <Line Type="bytes" Address="0x1159500" Value="4d85ff7411c4c17a6f074531e44531ff837b0802eb128b4b0883f9020f85aa070000c4c17a6f4630c5f97f842490010000751441bc8007000041bf380400000f1f840000000000"/>
+      <Line Type="bytes" Address="0x115bdc9" Value="c5f970d1eec5e9fac9c5f97ec980fd057508c5f1fed1c5f1e3cac5f85bc1c5fa16c8"/>
+      <Line Type="bytes" Address="0x853e31" Value="488d0502024900"/>
+      <Line Type="bytes" Address="0x899549" Value="488d05eaaa4400"/>
+      <Line Type="bytes" Address="0x899836" Value="488d05fda74400"/>
+      <Line Type="bytes" Address="0x8998e9" Value="488d054aa74400"/>
+      <Line Type="bytes" Address="0x89999c" Value="488d0597a64400"/>
+      <Line Type="bytes" Address="0xece195" Value="488b0d147f7602c5fa2a4120c5f22a4834c5fa5ec1c5fa118528ffffffc5fa2a4124c5f22a4838c5fa5ec1c5fa118524ffffff0f1f840000000000"/>
+      <Line Type="bytes" Address="0xed8bd8" Value="4c8d3d5bb4e0ff"/>
+      <Line Type="bytes" Address="0xed8cf1" Value="488d0542b3e0ff"/>
+      <Line Type="bytes" Address="0xef9cef" Value="488d1544a3deff"/>
+      <Line Type="bytes" Address="0xf68afc" Value="488d0537b5d7ff"/>
+      <Line Type="bytes" Address="0x102f15b" Value="488d1dd84ecbff"/>
+      <Line Type="bytes" Address="0x111f437" Value="488d05fc4bbcff"/>
+      <Line Type="bytes" Address="0xbaa58d" Value="488d05a69a1300"/>
+      <Line Type="bytes" Address="0xbb7402" Value="488d0531cc1200"/>
+      <Line Type="bytes" Address="0xed1b18" Value="4c8d2d1b25e1ff"/>
+      <Line Type="bytes" Address="0xed1149" Value="c5fa5e155d51210290"/>
+      <Line Type="bytes" Address="0xed1173" Value="c5fa5e0dd998190290"/>
+      <Line Type="bytes" Address="0x118d546" Value="c5fa5e05608df5010f1f440000"/>
+      <Line Type="bytes" Address="0x118d565" Value="c5f25e0de7d4ed010f1f440000"/>
+      <Line Type="bytes" Address="0xb5fb2d" Value="c5fa100dc3d05002660f1f440000"/>
+      <Line Type="bytes" Address="0xd2d4d5" Value="488d0d5e6bfbff"/>
+      <Line Type="bytes" Address="0xd3cedb" Value="488d055871faff"/>
+      <Line Type="bytes" Address="0xece21c" Value="c5fa101d8a802102c5fa108528ffffffc5fa101520c81902c5fa108d24ffffff"/>
+      <Line Type="bytes" Address="0x105a46a" Value="00050000"/>
+      <Line Type="bytes" Address="0x105a474" Value="d0020000"/>
+      <Line Type="bytes" Address="0x108b770" Value="488d05c388c5ff"/>
+      <Line Type="bytes" Address="0x108da89" Value="743f"/>
+      <Line Type="bytes" Address="0x108daca" Value="c5f85bc0c4e279180d119cf301c5f859c1c5f95bc090"/>
+      <Line Type="bytes" Address="0x108daf3" Value="eb09"/>
+    </PatchList>
+  </Metadata>
+</Patch>

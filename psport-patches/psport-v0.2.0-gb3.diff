@@ -1,0 +1,563 @@
+diff --git a/README.md b/README.md
+index 7010505..9295c86 100644
+--- a/README.md
++++ b/README.md
+@@ -119,7 +119,7 @@ PS_GAME_DIR=/path/to/dump PS_PERMISSIVE=1 bash run.sh         # any other title
+ 
+ `bash run.sh --software` renders with Lavapipe (Mesa's CPU Vulkan driver) instead of the GPU.
+ 
+-In game, Insert or L3+R3 opens the overlay menu. Saves and the shader cache go to `user/`,
++In game, Insert or F1 opens the overlay menu. Saves and the shader cache go to `user/`,
+ settings to `psport.ini`.
+ 
+ ### Prebuilt releases
+diff --git a/docs/en/TOYPAD.md b/docs/en/TOYPAD.md
+index cafc266..918d658 100644
+--- a/docs/en/TOYPAD.md
++++ b/docs/en/TOYPAD.md
+@@ -41,7 +41,7 @@ Nothing copyrighted ships with psport: figures are made from their ids.
+ 
+ ## Overlay
+ 
+-Once the game has initialized libSceUsbd with the pad connected, the overlay (Insert or L3+R3) shows
++Once the game has initialized libSceUsbd with the pad connected, the overlay (Insert or F1) shows
+ a **Toy pad** section: choose a figure, press **+ put here** on a zone, press a placed figure to
+ lift it. The dot before each zone is its light as the game set it: when the game asks for a figure
+ it lights the zone to put it on. The section writes `figures.txt`, so the runtime picks the change
+diff --git a/gpu/games/game_profile.cpp b/gpu/games/game_profile.cpp
+index aeebc2d..271fe39 100644
+--- a/gpu/games/game_profile.cpp
++++ b/gpu/games/game_profile.cpp
+@@ -15,6 +15,7 @@ extern const Title BloodborneTitle;
+ extern const Title BlackOpsTitle;
+ extern const Title BlackOps2Title;
+ extern const Title AyeshaTitle;
++extern const Title Gb3Title;
+ 
+ namespace {
+ constexpr bool NamesTask(const char* sz_reference) {
+@@ -36,7 +37,8 @@ constexpr bool NamesTask(const char* sz_reference) {
+ #undef QUIRK_GPU
+ #undef QUIRK_TRAITS
+ 
+-constexpr std::array<const Title*, 4> Titles = {&BloodborneTitle, &BlackOpsTitle, &BlackOps2Title, &AyeshaTitle};
++constexpr std::array<const Title*, 5> Titles = {&BloodborneTitle, &BlackOpsTitle, &BlackOps2Title,
++                                                 &AyeshaTitle, &Gb3Title};
+ std::atomic<const Title*> s_p_launched{nullptr};
+ std::atomic<const Profile*> s_p_active{nullptr};
+ } // namespace
+diff --git a/gpu/port/psport_overlay.cpp b/gpu/port/psport_overlay.cpp
+index 238738d..2d768ef 100644
+--- a/gpu/port/psport_overlay.cpp
++++ b/gpu/port/psport_overlay.cpp
+@@ -42,7 +42,7 @@ namespace {
+ std::mutex s_imgui_mutex; // the ImGui context: window thread (input) and present thread
+ std::atomic<bool> s_is_initialized{false};
+ std::atomic<bool> s_is_menu_open{false};
+-bool s_is_l3_down = false, s_is_r3_down = false;
++
+ bool s_is_dirty = false; // settings changed while open: saved on close
+ float s_base_scale = 1.0f;
+ // The game's text dialog (ImeDialog, the character name), typed on the keyboard or on the
+@@ -327,7 +327,7 @@ void WriteToyPad(const char* sz_path, const std::vector<ToyPadFigure>& figures,
+     }
+     std::fputs("# Figures on the emulated toy pad: \"<zone> <figure id>\", one per line.\n"
+                "# Zone 1: centre (1 figure), 2: left (3), 3: right (3). Also edited from the menu "
+-               "(Insert / L3+R3).\n",
++               "(Insert / F1).\n",
+                p_file);
+     for (const auto& f : figures) {
+         std::fprintf(p_file, "%d %u  # %s\n", f.zone, f.id, ToyPadLabel(names, f.id).c_str());
+@@ -459,7 +459,7 @@ void Menu() {
+     }();
+     const std::string window_title = s_game_title +
+                                      PsSettings::MenuText(" - Graphics", " — настройки", ": gráficos") +
+-                                     "  (Insert / L3+R3)###psport_settings";
++                                     "  (Insert / F1)###psport_settings";
+     if (!ImGui::Begin(window_title.c_str(), &should_keep_open, ImGuiWindowFlags_NoCollapse)) {
+         ImGui::End();
+         return;
+@@ -1403,7 +1403,7 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 c_images) {
+         return;
+     }
+     s_is_initialized = true;
+-    std::printf("Overlay: menu ready (Insert or L3+R3)\n");
++    std::printf("Overlay: menu ready (Insert or F1)\n");
+ }
+ 
+ void UpdateTextInput(PsHostWindow* p_window) {
+@@ -1459,8 +1459,9 @@ bool HandleEvent(const PsHostWindowEvent& event) {
+             return true;
+         }
+         if (is_down && !event.key.is_repeat &&
+-            (keycode == PS_HOST_WINDOW_KEYCODE_INSERT || (is_open && keycode == PS_HOST_WINDOW_KEYCODE_ESCAPE))) {
+-            SetOpen(keycode == PS_HOST_WINDOW_KEYCODE_INSERT ? !is_open : false);
++            (keycode == PS_HOST_WINDOW_KEYCODE_INSERT || keycode == PS_HOST_WINDOW_KEYCODE_F1 ||
++             (is_open && keycode == PS_HOST_WINDOW_KEYCODE_ESCAPE))) {
++            SetOpen(keycode != PS_HOST_WINDOW_KEYCODE_ESCAPE ? !is_open : false);
+             return true;
+         }
+         if (!is_open && s_is_message_open) {
+@@ -1490,11 +1491,6 @@ bool HandleEvent(const PsHostWindowEvent& event) {
+     case PS_HOST_WINDOW_EVENT_PAD_BUTTON_UP: {
+         const bool is_down = event.kind == PS_HOST_WINDOW_EVENT_PAD_BUTTON_DOWN;
+         const u8 button = u8(event.pad_button.button);
+-        if (button == PS_HOST_PAD_BUTTON_LEFT_STICK) {
+-            s_is_l3_down = is_down;
+-        } else if (button == PS_HOST_PAD_BUTTON_RIGHT_STICK) {
+-            s_is_r3_down = is_down;
+-        }
+         if (!is_down && s_is_release_pending && button == s_release_button) {
+             s_is_release_pending = false;
+             return true;
+@@ -1513,7 +1509,7 @@ bool HandleEvent(const PsHostWindowEvent& event) {
+             OpenClosePrompt();
+             return true;
+         }
+-        if (is_down && ((s_is_l3_down && s_is_r3_down) || is_menu_pressed)) {
++        if (is_down && is_menu_pressed) {
+             SetOpen(!is_open);
+             return true;
+         }
+diff --git a/gpu/port/psport_overlay.h b/gpu/port/psport_overlay.h
+index ce60099..c441c01 100644
+--- a/gpu/port/psport_overlay.h
++++ b/gpu/port/psport_overlay.h
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ // psport: in-game settings menu (Dear ImGui), drawn by the presenter into the swapchain image
+-// after the game frame, at display resolution. Insert (keyboard) or L3+R3 (gamepad) opens it;
++// after the game frame, at display resolution. Insert or F1 (keyboard) opens it;
+ // Guide (gamepad) or Home (keyboard) asks whether to close the game. While either is open the
+ // game gets no pad/keyboard input. Settings live in psport_settings.h.
+ 
+diff --git a/gpu/port/psport_settings.cpp b/gpu/port/psport_settings.cpp
+index aa57003..610bb04 100644
+--- a/gpu/port/psport_settings.cpp
++++ b/gpu/port/psport_settings.cpp
+@@ -484,7 +484,7 @@ void Save() {
+         std::fclose(p_file);
+     }
+     if (!has_lines) {
+-        out = "# psport settings (in-game menu: Insert / L3+R3)\n";
++        out = "# psport settings (in-game menu: Insert / F1)\n";
+     }
+     for (size_t k = 0; k < keys.size(); ++k) {
+         if (!written[k]) {
+diff --git a/gpu/shadps4/shader_recompiler/frontend/control_flow_graph.cpp b/gpu/shadps4/shader_recompiler/frontend/control_flow_graph.cpp
+index 1e84109..15678ee 100644
+--- a/gpu/shadps4/shader_recompiler/frontend/control_flow_graph.cpp
++++ b/gpu/shadps4/shader_recompiler/frontend/control_flow_graph.cpp
+@@ -45,6 +45,11 @@ static IR::Condition MakeCondition(const GcnInst& inst) {
+     }
+ }
+ 
++// psport: S_AND_B64 with EXEC as destination (see SplitDivergenceScopes).
++static bool IsAndIntoExec(const GcnInst& inst) {
++    return inst.opcode == Opcode::S_AND_B64 && inst.dst[0].field == OperandField::ExecLo;
++}
++
+ static bool IgnoresExecMask(const GcnInst& inst) {
+     // EXEC mask does not affect scalar instructions or branches.
+     switch (inst.category) {
+@@ -400,7 +405,12 @@ void CFG::SplitDivergenceScopes() {
+                // with SAVEEXEC to mask the threads that didn't pass the condition
+                // of initial branch.
+                (inst.opcode == Opcode::S_ANDN2_B64 && inst.dst[0].field == OperandField::ExecLo) ||
+-               inst.IsCmpx() || SetsExecToConstant(inst);
++               // psport (GB3 shop box): a plain S_AND_B64 into EXEC also opens a masked
++               // region when the outer EXEC was saved by an earlier instruction, e.g.
++               //   s_and_b64 exec, s[16:17], s[18:19] ... s_mov_b64 exec, s[16:17]
++               // (GB3 pixel shaders cbb4485f/5234fdc4/c64d192d, back-face normal flip).
++               // Without this the masked instructions ran for every lane.
++               IsAndIntoExec(inst) || inst.IsCmpx() || SetsExecToConstant(inst);
+     };
+     const auto is_close_scope = [](const GcnInst& inst) {
+         // Closing an EXEC scope can be either a branch instruction
+@@ -411,7 +421,11 @@ void CFG::SplitDivergenceScopes() {
+                // Those instructions need to be wrapped in the condition as well so allow branch
+                // as end scope instruction.
+                inst.opcode == Opcode::S_CBRANCH_EXECZ || inst.opcode == Opcode::S_ENDPGM ||
+-               (inst.opcode == Opcode::S_ANDN2_B64 && inst.dst[0].field == OperandField::ExecLo);
++               (inst.opcode == Opcode::S_ANDN2_B64 && inst.dst[0].field == OperandField::ExecLo) ||
++               // Like S_ANDN2_B64: an S_AND_B64 into EXEC inside an open region narrows the
++               // mask again, so it closes the current region (the instructions before it keep
++               // their guard) and then opens a new one at itself.
++               IsAndIntoExec(inst);
+     };
+ 
+     for (auto blk = blocks.begin(); blk != blocks.end(); blk++) {
+diff --git a/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.cpp b/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.cpp
+index cb33b09..3633f76 100644
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.cpp
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.cpp
+@@ -107,6 +107,7 @@ struct Sample {
+     vk::ComponentMapping mapping{};
+     u64 stage_hash{};
+     u32 i_stage_binding{};
++    u32 c_view_levels{1};
+ };
+ 
+ /// PS_CAPTURE_DUMP_TEX: a texture of a selected draw, dumped at its pass's end.
+@@ -256,6 +257,16 @@ u32 FramesPerCapture() {
+ }
+ 
+ /// PS_CAPTURE_DUMP_TEX, parsed once; null when unset, malformed or without PS_CAPTURE_DUMP.
++/// PS_CAPTURE_DUMP_TEX_LEVEL=<n>: dump that mip level of the selected textures (from the view's
++/// first, clamped to its last) instead of the first.
++u32 TextureDumpLevel() {
++    static const u32 s_i_level = [] {
++        const char* sz_value = std::getenv("PS_CAPTURE_DUMP_TEX_LEVEL");
++        return sz_value ? u32(std::strtoul(sz_value, nullptr, 10)) : 0u;
++    }();
++    return s_i_level;
++}
++
+ const PsSkipDraws::Selector* TextureSelector() {
+     static const std::optional<PsSkipDraws::Selector> s_selector =
+         []() -> std::optional<PsSkipDraws::Selector> {
+@@ -1012,7 +1023,7 @@ void DumpPassEnd(Entry& entry, u32 i_pass, bool is_wait_allowed) {
+             .format = sample.target.format,
+             .width = sample.target.width,
+             .height = sample.target.height,
+-            .i_level = sample.ref.i_level,
++            .i_level = sample.ref.i_level + std::min(TextureDumpLevel(), sample.c_view_levels - 1),
+             .i_layer = sample.ref.i_layer,
+             .mapping = sample.mapping,
+             .is_texture = true,
+@@ -1026,7 +1037,9 @@ void DumpPassEnd(Entry& entry, u32 i_pass, bool is_wait_allowed) {
+             CaptureDump::Skip(source, "storage image: the pass may have written it");
+             continue;
+         }
+-        DumpTarget(entry, sample.ref, std::move(source), is_wait_allowed);
++        ImageRef ref = sample.ref;
++        ref.i_level = source.i_level;
++        DumpTarget(entry, ref, std::move(source), is_wait_allowed);
+     }
+ }
+ 
+@@ -2191,7 +2204,10 @@ void FrameCapture::Sampled(const VideoCore::Image& image, VideoCore::ImageId id,
+     if (s_pending_sampled.size() >= 64) {
+         return;
+     }
+-    std::string identity = std::format("{} view {:#x}", Identify(image, id), HandleBits(view));
++    std::string identity = std::format(
++        "{} view {:#x} levels {}+{}/{} layers {}+{}/{}", Identify(image, id), HandleBits(view),
++        view_info.range.base.level, view_info.range.extent.levels, image.info.resources.levels,
++        view_info.range.base.layer, view_info.range.extent.layers, image.info.resources.layers);
+     if (va_requested != image.info.guest_address) {
+         identity += std::format(" requested {:#x}", va_requested);
+     }
+@@ -2209,7 +2225,8 @@ void FrameCapture::Sampled(const VideoCore::Image& image, VideoCore::ImageId id,
+                                  .view_format = view_info.format,
+                                  .mapping = view_info.mapping,
+                                  .stage_hash = stage_hash,
+-                                 .i_stage_binding = i_binding});
++                                 .i_stage_binding = i_binding,
++                                 .c_view_levels = view_info.range.extent.levels});
+ }
+ 
+ void FrameCapture::SamplerBound(u64 stage_hash, u32 i_sampler, const AmdGpu::Sampler& sharp) {
+diff --git a/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.h b/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.h
+index 5ca0069..ce4fa65 100644
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.h
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.h
+@@ -13,7 +13,8 @@
+ // whole-image counts of the depth and stencil texels it changed.
+ // PS_CAPTURE_DUMP=1 writes each pass's colour attachment 0 as a small PNG beside the frame file,
+ // 2 every attachment; PS_CAPTURE_DUMP_TEX=<vs>:<ps>[@<target>][#<n>] adds the textures the draws
+-// it selects sample, with their samplers in the index (vk_frame_capture_dump.h).
++// it selects sample, with their samplers in the index (vk_frame_capture_dump.h);
++// PS_CAPTURE_DUMP_TEX_LEVEL=<n> dumps their mip level n instead of the first.
+ // PS_CAPTURE_DUMP_VSCONST=<vs>:<ps>[@<target>][#<n>] writes the user data and the buffers the
+ // vertex and pixel stages of the draws it selects read, with the writes into those ranges the GPU
+ // side saw since the capture was armed (vk_frame_capture_consts.h).
+diff --git a/gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp b/gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp
+index 90c05b8..23a33e8 100644
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp
+@@ -14,7 +14,7 @@
+ 
+ namespace Serialization {
+ /* You should increment versions below once corresponding serialization scheme is changed. */
+-static constexpr u32 ShaderBinaryVersion = 16u; // psport: valid-mask exports outside EXEC scopes
++static constexpr u32 ShaderBinaryVersion = 17u; // psport: S_AND_B64 into EXEC opens a scope (GB3 shop box)
+ static constexpr u32 ShaderMetaVersion = 14u; // psport: StageSpecialization::xfb_source
+ static constexpr u32 PipelineKeyVersion = 7u; // psport: SerializationSupport::xfb_source
+ 
+diff --git a/src/input/runtime_pad.c b/src/input/runtime_pad.c
+index 77dc02b..463ddc7 100644
+--- a/src/input/runtime_pad.c
++++ b/src/input/runtime_pad.c
+@@ -290,7 +290,7 @@ static void report_guest_heap(void) {
+  * add to the gamepad's, a held move/look key moves the stick to its edge over a short ramp (key_stick).
+  * menu is no PS4 input: key.menu (keys, a chord allowed) and pad.menu (buttons, or a two-button
+  * chord "leftstick+rightstick") open and close the port's menu (runtime_pad_menu_pressed), besides
+- * the built-in Insert and L3+R3, and are unbound unless set. While a menu binding is held, its keys
++ * the built-in Insert and F1 (F1 is the default key.menu binding). While a menu binding is held, its keys
+  * and buttons reach no other input, so it wins over the game's use of them.
+  * skip_movie is no PS4 input either: with skip_movies=1 (PS_SKIP_MOVIES wins), a press of
+  * key.skip_movie (default Escape, which the neutral layout leaves free) or pad.skip_movie (default
+@@ -344,6 +344,7 @@ static void bind_defaults(void) {
+         {IN_R3,MOUSE_KEY+PS_HOST_INPUT_MOUSE_MIDDLE}, {IN_R2,MOUSE_KEY+PS_HOST_INPUT_MOUSE_X1},
+         {IN_L1,MOUSE_KEY+PS_HOST_INPUT_MOUSE_X2},
+         {IN_UP,MOUSE_WHEEL_UP}, {IN_DOWN,MOUSE_WHEEL_DOWN}, {IN_SKIP_MOVIE,PS_HOST_INPUT_KEY_ESCAPE},
++        {IN_MENU,PS_HOST_INPUT_KEY_F1},
+     };
+     static const struct { int input, button; } s_pads[]={
+         {IN_CROSS,PS_HOST_PAD_BUTTON_SOUTH}, {IN_CIRCLE,PS_HOST_PAD_BUTTON_EAST},
+@@ -462,7 +463,7 @@ static LineResult apply_binding_line(const char *sz_key, const char *sz_value, c
+         }
+     }
+     if (input==IN_MENU)
+-        printf("Runtime: controls: the port's menu on %s \"%s\" (%s; %d bound), besides Insert and L3+R3\n",
++        printf("Runtime: controls: the port's menu on %s \"%s\" (%s; %d bound), besides Insert and F1\n",
+                keyboard ? "keys" : "gamepad buttons",sz_value,sz_origin,keyboard ? p_binding->c_keys : p_binding->c_pads);
+     return LINE_APPLIED;
+ }
+@@ -1256,20 +1257,24 @@ static ABI int32_t pad_init(void) { pthread_mutex_lock(&s_lock); s_is_initialize
+ static ABI int32_t pad_open(int32_t user, int32_t type, int32_t i_device, const void *p_param) {
+     (void)p_param;
+     if (!s_is_initialized) return ERR_NOT_INITIALIZED;
+-    if (user!=1 || (type!=0 && type!=2) || i_device) { /* only user 1's standard or special port */
++    /* User 1's standard or special port, and -1: a title that opens the pad without a user
++     * (Gundam Breaker 3). */
++    if ((user!=1 && user!=-1) || (type!=0 && type!=2) || i_device) {
+         printf("Runtime: scePadOpen(user %d, type %d, index %d) refused\n",user,type,i_device);
+         return ERR_INVALID_ARG;
+     }
+     pthread_mutex_lock(&s_lock);
+-    int already=s_is_opened; s_is_opened=1;
++    const int already=s_is_opened; s_is_opened=1;
+     pthread_mutex_unlock(&s_lock);
+-    if (already) return ERR_ALREADY_OPENED;
+-    puts("Runtime: pad opened for user 1 (host gamepad or keyboard)");
++    /* A title opens the pad more than once (Gundam Breaker 3 opens one per user, and again for its
++     * system dialogs): the single handle serves every open instead of failing the second one. */
++    if (already) return PAD_HANDLE;
++    printf("Runtime: pad opened for user %d (host gamepad or keyboard)\n",user);
+     return PAD_HANDLE;
+ }
+ static ABI int32_t pad_get_handle(int32_t user, int32_t type, int32_t i_device) {
+     if (!s_is_initialized) return ERR_NOT_INITIALIZED;
+-    return user==1 && (type==0 || type==2) && !i_device && s_is_opened ? PAD_HANDLE : ERR_NO_HANDLE;
++    return (user==1 || user==-1) && (type==0 || type==2) && !i_device && s_is_opened ? PAD_HANDLE : ERR_NO_HANDLE;
+ }
+ static ABI int32_t pad_close(int32_t h_handle) {
+     if (h_handle!=PAD_HANDLE || !s_is_opened) return ERR_INVALID_HANDLE;
+diff --git a/src/kernel/runtime_memory.c b/src/kernel/runtime_memory.c
+index 12f47d0..587ac26 100644
+--- a/src/kernel/runtime_memory.c
++++ b/src/kernel/runtime_memory.c
+@@ -348,9 +348,20 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
+         if (!ignore_reserved || g_p_vmas[i].kind!=KIND_RESERVED) return 1;
+     return 0;
+ }
++/* PS_LOW_FLEXIBLE=1: the guest's flexible memory (anonymous mmap: its libc heap) is placed below
++ * 4 GiB instead of in the PS4 user range at 64 GiB. Some titles keep heap pointers in 32-bit
++ * fields: GB3's Lua 5.1 rejects a lua_State above 4 GiB, returns NULL, and its script setup then
++ * dereferences the NULL (guest fault at image offset 0x3c0cd2, right after a mission-end save).
++ * The image and the host-owned low arena keep their places; this only moves the heap. */
++#define LOW_FLEXIBLE_MIN UINT64_C(0x10000000)
++static uintptr_t flexible_floor(void) {
++    static int s_is_low=-1;
++    if (s_is_low<0) s_is_low=runtime_env_flag("PS_LOW_FLEXIBLE",0);
++    return s_is_low ? LOW_FLEXIBLE_MIN : USER_MIN;
++}
+ /* First-fit search in the PS4 user range, starting from the hint. */
+-static uintptr_t find_free(uintptr_t hint, uint64_t cb_range, uint64_t alignment) {
+-    uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
++static uintptr_t find_free(uintptr_t hint, uint64_t cb_range, uint64_t alignment, uintptr_t floor) {
++    uintptr_t at=align_up(hint<floor ? floor : hint, alignment);
+     for (size_t i=vma_index(at); at+cb_range<=USER_MAX; ++i) {
+         if (i==g_c_vmas || g_p_vmas[i].start>=at+cb_range) return at;
+         at=align_up(g_p_vmas[i].end,alignment);
+@@ -376,7 +387,7 @@ static int32_t place_backed(void **pp_inout, uint64_t cb_range, int prot, int fl
+         if (!va_range || va_range%PAGE) return INVALID;
+         if ((flags & MAP_NO_OVERWRITE) && overlaps(va_range,va_range+cb_range,1)) return NO_MEMORY;
+     } else {
+-        va_range=find_free(va_range,cb_range,alignment);
++        va_range=find_free(va_range,cb_range,alignment,kind==KIND_FLEXIBLE ? flexible_floor() : USER_MIN);
+         if (!va_range) return NO_MEMORY;
+     }
+     void *p_mapped = kind==KIND_RESERVED
+diff --git a/src/platform/host_features.inc b/src/platform/host_features.inc
+index dcff41e..d434b50 100644
+--- a/src/platform/host_features.inc
++++ b/src/platform/host_features.inc
+@@ -239,7 +239,7 @@ FEATURE_HOST(input_mouse, WIN32, EXPERIMENTAL,
+              "#1009")
+ 
+ FEATURE(port_menu_binding, io, "psport.ini's key.menu and pad.menu: a key, gamepad button or two-button chord that opens "
+-                               "the port's menu besides Insert and L3+R3")
++                               "the port's menu besides Insert and F1")
+ FEATURE_HOST(port_menu_binding, LINUX, IMPLEMENTED,
+              "SDL3 keyboard and gamepad state on the window thread's events (runtime_pad.c runtime_pad_menu_pressed, "
+              "gpu/port/psport_overlay.cpp)",
+diff --git a/src/platform/ps_host_input.h b/src/platform/ps_host_input.h
+index 1431b3e..c91e963 100644
+--- a/src/platform/ps_host_input.h
++++ b/src/platform/ps_host_input.h
+@@ -43,6 +43,7 @@ enum {
+     PS_HOST_INPUT_KEY_BACKSPACE = 42,
+     PS_HOST_INPUT_KEY_TAB = 43,
+     PS_HOST_INPUT_KEY_SPACE = 44,
++    PS_HOST_INPUT_KEY_F1 = 58,
+     PS_HOST_INPUT_KEY_F9 = 66,
+     PS_HOST_INPUT_KEY_RIGHT = 79,
+     PS_HOST_INPUT_KEY_LEFT = 80,
+diff --git a/src/system/runtime_savedata.c b/src/system/runtime_savedata.c
+index 31b3481..7a9d65c 100644
+--- a/src/system/runtime_savedata.c
++++ b/src/system/runtime_savedata.c
+@@ -87,6 +87,13 @@ static Event s_events[SLOTS];
+ static size_t s_c_events;
+ static struct { char sz_dir[640]; uint64_t cb_memory; } s_memories[SLOTS];
+ static size_t s_c_mounts_done, s_c_memory_writes;
++/* The callback a title registers with sceSaveDataRegisterEventCallback. libSceSaveData reports the
++ * events there as well as in the polling queue: a title that registered one waits for the callback
++ * and is not answered by sceSaveDataGetEventResult (Gundam Breaker 3 parks on its SAVING screen
++ * after sceSaveDataUmountWithBackup until the umount-with-backup event arrives this way). */
++typedef void (ABI *EventCallback)(const Event *p_event, void *p_user);
++static EventCallback s_pfn_event_callback;
++static void *s_p_event_user;
+ 
+ void runtime_savedata_configure(const char *sz_title) {
+     if (sz_title && *sz_title) snprintf(s_sz_title_id,sizeof(s_sz_title_id),"%s",sz_title);
+@@ -138,6 +145,7 @@ static int read_param(const char *sz_meta, Param *p_param) {
+ static ABI int32_t save_initialize(const void *p_param) { (void)p_param; s_is_initialized=1; return 0; }
+ static ABI int32_t save_terminate(void) {
+     if (!s_is_initialized) return ERR_NOT_INITIALIZED;
++    s_pfn_event_callback=NULL; s_p_event_user=NULL;
+     s_is_initialized=0; return 0;
+ }
+ static int32_t mount(int32_t user, const char *sz_title, const DirName *p_dir, uint32_t mode, uint64_t c_blocks,
+@@ -196,18 +204,35 @@ static int slot_of(const MountPoint *p_point) {
+     return slot>=0 && slot<SLOTS && s_slots[slot].used ? slot : -1;
+ }
+ static int32_t copy_save_locked(int32_t user, const TitleId *p_title, const char *sz_dir, int is_restore);
++/* Delivered with s_lock released and on the thread that made the request, so the guest's callback
++ * runs with the guest TLS and stack that thread already has. */
++static void deliver_event(const Event *p_event) {
++    pthread_mutex_lock(&s_lock);
++    EventCallback pfn_callback=s_pfn_event_callback;
++    void *p_user=s_p_event_user;
++    pthread_mutex_unlock(&s_lock);
++    if (pfn_callback) pfn_callback(p_event,p_user);
++}
+ static int32_t umount(const MountPoint *p_point, int backup) {
+     if (!s_is_initialized) return ERR_NOT_INITIALIZED;
+     if (!p_point) return ERR_INVALID_ARGUMENT;
++    Event event={0};
++    int has_event=0;
+     pthread_mutex_lock(&s_lock);
+     int slot=slot_of(p_point);
+     if (slot>=0) {
+         runtime_file_unmount(p_point->data); s_slots[slot].used=0;
+-        if (backup) copy_save_locked(s_slots[slot].user,&s_slots[slot].title,s_slots[slot].dir.data,0);
+-        if (backup && s_c_events<SLOTS)
+-            s_events[s_c_events++]=(Event){.type=EVENT_UMOUNT_BACKUP,.user=s_slots[slot].user,.title=s_slots[slot].title,.dir=s_slots[slot].dir};
++        int32_t error=0;
++        if (backup) error=copy_save_locked(s_slots[slot].user,&s_slots[slot].title,s_slots[slot].dir.data,0);
++        if (backup) { /* the backup's outcome goes to the game, in the event and its error code */
++            event=(Event){.type=EVENT_UMOUNT_BACKUP,.error=error,.user=s_slots[slot].user,
++                          .title=s_slots[slot].title,.dir=s_slots[slot].dir};
++            if (s_c_events<SLOTS) s_events[s_c_events++]=event;
++            has_event=1;
++        }
+     }
+     pthread_mutex_unlock(&s_lock);
++    if (has_event) deliver_event(&event);
+     return slot>=0 ? 0 : ERR_NOT_FOUND;
+ }
+ static ABI int32_t save_umount(const MountPoint *p_point) { return umount(p_point,0); }
+@@ -558,10 +583,20 @@ static void queue_event_locked(uint32_t type, int32_t user, const TitleId *p_tit
+ static ABI int32_t save_backup(const BackupRequest *p_request) {
+     if (!s_is_initialized) return ERR_NOT_INITIALIZED;
+     if (!p_request || !p_request->dir || !valid_name(p_request->dir->data,sizeof(p_request->dir->data))) return ERR_PARAMETER;
++    Event event={0};
++    int has_event=0;
+     pthread_mutex_lock(&s_lock);
+     const int32_t result=copy_save_locked(p_request->user,p_request->title,p_request->dir->data,0);
+-    if (!result) queue_event_locked(EVENT_BACKUP,p_request->user,p_request->title,p_request->dir);
++    if (!result) {
++        queue_event_locked(EVENT_BACKUP,p_request->user,p_request->title,p_request->dir);
++        event=(Event){.type=EVENT_BACKUP,.user=p_request->user};
++        if (p_request->title) event.title=*p_request->title;
++        else snprintf(event.title.data,sizeof(event.title.data),"%.9s",s_sz_title_id);
++        if (p_request->dir) event.dir=*p_request->dir;
++        has_event=1;
++    }
+     pthread_mutex_unlock(&s_lock);
++    if (has_event) deliver_event(&event);
+     return result;
+ }
+ static ABI int32_t save_check_backup(const BackupCheck *p_check) {
+@@ -628,6 +663,23 @@ static ABI int32_t memory_sync(const MemorySync *p_sync) {
+     pthread_mutex_unlock(&s_lock);
+     return result;
+ }
++static ABI int32_t save_register_event_callback(EventCallback pfn_callback, void *p_user) {
++    if (!s_is_initialized) return ERR_NOT_INITIALIZED;
++    if (!pfn_callback) return ERR_PARAMETER;
++    pthread_mutex_lock(&s_lock);
++    s_pfn_event_callback=pfn_callback;
++    s_p_event_user=p_user;
++    pthread_mutex_unlock(&s_lock);
++    printf("Runtime: save data event callback registered\n");
++    return 0;
++}
++static ABI int32_t save_unregister_event_callback(void) {
++    pthread_mutex_lock(&s_lock);
++    s_pfn_event_callback=NULL;
++    s_p_event_user=NULL;
++    pthread_mutex_unlock(&s_lock);
++    return 0;
++}
+ static ABI int32_t save_clear_progress(void) { return s_is_initialized ? 0 : ERR_NOT_INITIALIZED; }
+ 
+ static const RuntimeExport s_exports[]={
+@@ -635,6 +687,8 @@ static const RuntimeExport s_exports[]={
+     {"sceSaveDataInitialize3",save_initialize}, {"sceSaveDataTerminate",save_terminate},
+     {"sceSaveDataMount",save_mount}, {"sceSaveDataMount2",save_mount2}, {"sceSaveDataUmount",save_umount},
+     {"sceSaveDataUmountWithBackup",save_umount_with_backup}, {"sceSaveDataGetEventResult",save_event_result},
++    {"sceSaveDataRegisterEventCallback",save_register_event_callback},
++    {"sceSaveDataUnregisterEventCallback",save_unregister_event_callback},
+     {"sceSaveDataSetParam",save_set_param}, {"sceSaveDataGetParam",save_get_param},
+     {"sceSaveDataSaveIcon",save_icon}, {"sceSaveDataDelete",save_delete},
+     {"sceSaveDataDirNameSearch",save_search}, {"sceSaveDataTransferringMount",save_transferring_mount},
+diff --git a/src/system/runtime_services.c b/src/system/runtime_services.c
+index 92253b9..49ccb52 100644
+--- a/src/system/runtime_services.c
++++ b/src/system/runtime_services.c
+@@ -588,8 +588,19 @@ static int32_t msg_start(const uint8_t *p_param) {
+     memset(&s_msg,0,sizeof(s_msg));
+     s_msg.mode=mode; s_msg.button_type=button_type; s_msg.system_type=system_id; s_msg.c_buttons=c_buttons; s_msg.i_default=i_default; s_msg.can_cancel=can_cancel;
+     memcpy(s_msg.button_ids,button_ids,sizeof(s_msg.button_ids));
+-    s_msg.is_shown=psport_gpu_message_begin(system_id>=0 ? NULL : sz_shown,system_id,buttons,c_buttons,i_default,can_cancel);
+-    const int auto_ms=runtime_env_int("PS_MSGDIALOG_AUTO_MS",s_msg.is_shown ? -1 : 1000);
++    /* GB3's offline startup asks to sign in to the portal on every boot.
++     * Decline this one question without opening the overlay. Keep normal dialog
++     * state/result handling, including button id 2 (No), and all other prompts.
++     * PS_GB3_PSN_PROMPT=1 restores the original startup question. */
++    const int skip_gb3_signin=mode==MSG_MODE_USER && button_type==MSG_BUTTONS_YESNO &&
++        !strcmp(runtime_content_title_id(),"CUSA07651") &&
++        strstr(sz_shown,"GUNDAM PERFECT GAMES") && strstr(sz_shown,"PSN") &&
++        strstr(sz_shown,"Sign in into") && !runtime_env_int("PS_GB3_PSN_PROMPT",0);
++    if (skip_gb3_signin) {
++        s_msg.i_default=1;
++        printf("Runtime: GB3 startup PSN sign-in question suppressed; choosing No\n");
++    } else s_msg.is_shown=psport_gpu_message_begin(system_id>=0 ? NULL : sz_shown,system_id,buttons,c_buttons,i_default,can_cancel);
++    const int auto_ms=skip_gb3_signin ? 0 : runtime_env_int("PS_MSGDIALOG_AUTO_MS",s_msg.is_shown ? -1 : 1000);
+     /* A dialog that only waits is the game's to close; choosing its cancel button would abort it. */
+     const int is_auto=auto_ms>=0 && c_buttons>0 && button_type!=MSG_BUTTONS_CANCEL && button_type!=MSG_BUTTONS_WAIT_CANCEL;
+     if (is_auto) s_msg.auto_at_ns=runtime_wait_clock()+(uint64_t)auto_ms*1000000u;
+@@ -597,7 +608,7 @@ static int32_t msg_start(const uint8_t *p_param) {
+     if (__atomic_fetch_add(&s_c_msg_opened,1,__ATOMIC_RELAXED)==0) runtime_calls_add_summary(msg_summary);
+     if (system_id>=0) printf("Runtime: MsgDialog opened: system message %d",system_id);
+     else printf("Runtime: MsgDialog opened: mode %d, button type %d, \"%s\"",mode,button_type,sz_shown);
+-    printf(" (%d buttons, default %d%s); %s",c_buttons,i_default,can_cancel ? ", cancellable" : "",
++    printf(" (%d buttons, default %d%s); %s",c_buttons,s_msg.i_default,can_cancel ? ", cancellable" : "",
+            s_msg.is_shown ? "shown by the overlay" : "not shown (no window or overlay)");
+     if (is_auto) printf(", auto-answered in %d ms\n",auto_ms);
+     else printf(c_buttons ? ", waits for the player\n" : ", waits for the game to close it\n");

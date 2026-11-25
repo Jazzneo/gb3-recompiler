@@ -1,0 +1,26 @@
+#!/bin/sh
+# AppRun for Recompiler Gundam Breaker 3 Break Edition.
+#   <AppImage>              open the window
+#   <AppImage> --play       start the installed game (Steam shortcut)
+#   <AppImage> install|apply|restore|status|import-saves ...   command line (see --help)
+HERE=$(dirname "$(readlink -f "$0")")
+export GB3R_ROOT="$HERE"
+LD="$HERE/runtime/psport-bundle/lib/ld-linux-x86-64.so.2"
+LIBS="$HERE/python/lib:$HERE/runtime/psport-bundle/lib"
+PY="$HERE/python/bin/python3"
+# Bundled Python (Fedora build, glibc 2.44) through the bundle's own glibc loader: independent of
+# the host's glibc and of whether the distro ships python3-tk.
+if [ -x "$LD" ] && [ -x "$PY" ]; then
+    export PYTHONHOME="$HERE/python" PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
+    for d in "$HERE"/python/lib/tcl9.0 "$HERE"/python/lib/tcl9*; do [ -f "$d/init.tcl" ] && { export TCL_LIBRARY="$d"; break; }; done
+    for d in "$HERE"/python/lib/tk9.0 "$HERE"/python/lib/tk9*; do [ -f "$d/tk.tcl" ] && { export TK_LIBRARY="$d"; break; }; done
+    # How core.py starts Python again (fix-interp.py): fields separated by \037.
+    GB3R_PYCMD=$(printf '%s\037%s\037%s\037%s' "$LD" "--library-path" "$LIBS" "$PY")
+    export GB3R_PYCMD
+    if "$LD" --library-path "$LIBS" "$PY" -c 'import tkinter' 2>/dev/null; then
+        exec "$LD" --library-path "$LIBS" "$PY" -s -B "$HERE/app/main.py" "$@"
+    fi
+    echo "bundled Python could not start; trying the system python3" >&2
+    unset PYTHONHOME TCL_LIBRARY TK_LIBRARY GB3R_PYCMD
+fi
+exec python3 "$HERE/app/main.py" "$@"
