@@ -1,7 +1,10 @@
 """Entry point.
 
     gb3r                     open the window
-    gb3r --play              start the installed game (for a Steam shortcut)
+    gb3r --play [--dir DIR] [play-gb3.sh options]   start the installed game (Steam shortcut, RecompLauncher)
+    gb3r --prepare --game=PKG_OR_FOLDER --dir DIR [--xbox] [--720p]
+                             windowless setup step for RecompLauncher: prints `progress 0.4 Text` lines;
+                             only the mods named by a flag are applied
     gb3r install --pkg FILE [--dir DIR] [--no-xbox] [--no-720p] [--fps 30|60|uncapped]
     gb3r apply  [--dir DIR] [--[no-]xbox] [--[no-]720p]  change mods on an installed game
     gb3r restore [--dir DIR]                             put the original game files back
@@ -9,14 +12,49 @@
     gb3r import-saves [--dir DIR] [--from BUNDLE]
 """
 import argparse
+import os
 import sys
 
 from . import core
 
 
+def launcher_mode(argv):
+    """--play / --prepare: options for scripts and launchers; the window and subcommands are unchanged."""
+    ap = argparse.ArgumentParser(prog='gb3r', allow_abbrev=False)
+    ap.add_argument('--play', action='store_true')
+    ap.add_argument('--prepare', action='store_true')
+    ap.add_argument('--dir')
+    ap.add_argument('--game')
+    ap.add_argument('--xbox', action='store_true')
+    ap.add_argument('--720p', dest='r720', action='store_true')
+    a, rest = ap.parse_known_args(argv)
+    cfg = core.load_config()
+    folder = a.dir or cfg['install_dir']
+    if a.play:
+        inst = core.Install(folder)
+        if not os.path.exists(inst.play):
+            print('Not installed in %s: run the setup first.' % inst.dir, file=sys.stderr)
+            return 2
+        env = core.game_env()
+        os.execvpe('bash', ['bash', inst.play] + rest, env)
+    if rest:
+        print('unknown arguments: %s' % ' '.join(rest), file=sys.stderr)
+        return 2
+    opts = dict(core.DEFAULT_OPTIONS, xbox=a.xbox, render720=a.r720)
+    try:
+        core.prepare(folder, a.game, opts, lambda m: print(m, flush=True))
+        return 0
+    except Exception as e:  # noqa: BLE001 - the launcher shows the last lines to the player
+        print('Setup failed: %s' % e, flush=True)
+        return 1
+
+
 def cli(argv):
+    if '--play' in argv or '--prepare' in argv:
+        return launcher_mode(argv)
     ap = argparse.ArgumentParser(prog='gb3r', description=core.APP_NAME)
-    ap.add_argument('--play', action='store_true', help='start the installed game')
+    ap.add_argument('--play', action='store_true', help='start the installed game (with --dir DIR)')
+    ap.add_argument('--prepare', action='store_true', help='windowless setup (with --game, --dir)')
     ap.add_argument('--version', action='store_true')
     sub = ap.add_subparsers(dest='cmd')
     for name in ('install', 'apply', 'restore', 'status', 'import-saves', 'gui'):
@@ -37,11 +75,6 @@ def cli(argv):
     if a.version:
         print(core.APP_NAME, core.APP_VERSION)
         return 0
-    if a.play:
-        p = core.play(cfg['install_dir'])
-        for line in p.stdout:
-            sys.stdout.write(line)
-        return p.wait()
     if a.cmd in (None, 'gui'):
         from . import gui
         return gui.main()

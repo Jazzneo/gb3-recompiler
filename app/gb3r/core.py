@@ -212,7 +212,90 @@ def find_pkgs(limit=40):
     return found
 
 
+# ------------------------------------------------------------------ progress (RecompLauncher setup step)
+
+PROGRESS = None          # set by prepare(): callable(fraction, text)
+
+
+def report(frac, text):
+    if PROGRESS:
+        PROGRESS(frac, text)
+
+
+def _dir_size(path):
+    total = 0
+    for root, _, files in os.walk(path):
+        for fn in files:
+            try:
+                total += os.lstat(os.path.join(root, fn)).st_size
+            except OSError:
+                pass
+    return total
+
+
+class _SizeWatch:
+    """Reports how much of `expected` bytes has landed in `path`, every few seconds."""
+
+    def __init__(self, path, expected, lo, hi, text):
+        import threading
+        self.args = (path, expected, lo, hi, text)
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        path, expected, lo, hi, text = self.args
+        while not self.stop.wait(3):
+            frac = min(1.0, _dir_size(path) / float(max(expected, 1)))
+            report(lo + (hi - lo) * frac, text)
+
+    def __enter__(self):
+        if PROGRESS:
+            self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+
+
 # ------------------------------------------------------------------ steps
+
+def is_game_folder(path):
+    """A dumped CUSA07651 folder: eboot.bin and the title id in sce_sys/param.sfo."""
+    if not os.path.isfile(os.path.join(path, 'eboot.bin')):
+        return False, 'no eboot.bin in %s' % path
+    try:
+        with open(os.path.join(path, 'sce_sys', 'param.sfo'), 'rb') as f:
+            sfo = f.read()
+    except OSError:
+        return False, 'no sce_sys/param.sfo in %s' % path
+    if TITLE.encode() not in sfo:
+        return False, '%s is another game (its param.sfo does not name %s)' % (path, TITLE)
+    return True, 'dumped game folder %s' % path
+
+
+def step_copy_folder(inst, src, log):
+    ok, msg = is_game_folder(src)
+    log('Game folder: %s' % msg)
+    if not ok:
+        raise RuntimeError(msg)
+    if inst.has_game():
+        log('Game already in place: %s (skipping the copy)' % inst.game)
+        return
+    size = _dir_size(src)
+    os.makedirs(inst.dir, exist_ok=True)
+    st = os.statvfs(inst.dir)
+    if st.f_bavail * st.f_frsize < size + (256 << 20):
+        raise RuntimeError('Not enough space in %s: %s free, about %s needed.'
+                           % (inst.dir, human(st.f_bavail * st.f_frsize), human(size)))
+    tmp = inst.game + '.copying'
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp)
+    log('Copying %s of game files (your folder is not changed)...' % human(size))
+    with _SizeWatch(tmp, size, 0.05, 0.8, 'Copying your game folder'):
+        shutil.copytree(src, tmp)
+    os.replace(tmp, inst.game)
+    log('Copied: %s' % inst.game)
+
 
 def step_unpack(inst, pkg, log):
     ok, msg = check_pkg(pkg)
@@ -239,7 +322,8 @@ def step_unpack(inst, pkg, log):
         shutil.rmtree(tmp)
     os.makedirs(tmp)
     log('Unpacking %s into %s (a few minutes)...' % (human(size), inst.game))
-    code = run_logged([tool, pkg, tmp], log)
+    with _SizeWatch(tmp, size, 0.05, 0.8, 'Unpacking your PKG'):
+        code = run_logged([tool, pkg, tmp], log)
     if code != 0:
         raise RuntimeError('The unpacker stopped with exit code %d' % code)
     root = tmp
@@ -408,6 +492,10 @@ def write_play(inst, opts, log):
     with open(inst.play, 'w') as f:
         f.write(text)
     os.chmod(inst.play, 0o755)
+    if os.environ.get('RECOMPLAUNCHER') == '1':
+        # RecompLauncher has its own library entry and shortcuts; write nothing outside the game's folder.
+        log('Play script: %s' % inst.play)
+        return
     # A menu entry: Steam's "Add a Non-Steam Game" lists these, so the game is one tick away.
     apps = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), 'applications')
     try:
@@ -463,9 +551,16 @@ def install(folder, pkg, opts, log):
     if not inst.has_game():
         if not pkg:
             raise RuntimeError('Pick your GUNDAM BREAKER 3 PKG first')
-        step_unpack(inst, pkg, log)
+        report(0.02, 'Reading your copy')
+        if os.path.isdir(pkg):
+            step_copy_folder(inst, pkg, log)
+        else:
+            step_unpack(inst, pkg, log)
+    report(0.82, 'Checking the game files')
     known = check_game(inst, log)
+    report(0.85, 'Installing the psport runtime')
     step_runtime(inst, log)
+    report(0.92, 'Applying the fixes and mods')
     want = step_mods(inst, opts, log, known)
     write_play(inst, opts, log)
     s = inst.state()
@@ -475,6 +570,41 @@ def install(folder, pkg, opts, log):
     s['installed_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
     inst.save_state(s)
     log('== Done in %d s. Press Play, or add play.sh to Steam.' % (time.time() - t0))
+    return inst
+
+
+def _build_id(opts):
+    return {'tool': APP_VERSION, 'xbox': bool(opts.get('xbox')), 'render720': bool(opts.get('render720'))}
+
+
+def prepare(folder, source, opts, log):
+    """RecompLauncher's windowless setup step: prints `progress <0..1> <text>` lines, never asks.
+
+    Re-running with the same tool version and options on a finished install is a no-op.
+    Without a source it rebuilds from the game already unpacked in `folder`.
+    """
+    global PROGRESS
+
+    def progress(frac, text):
+        print('progress %.2f %s' % (frac, text), flush=True)
+    PROGRESS = progress
+    inst = Install(folder)
+    s = inst.state()
+    want = _build_id(opts)
+    if (s.get('build') == want and inst.has_game() and inst.has_runtime()
+            and os.path.exists(inst.play)):
+        progress(1, 'Already built')
+        return inst
+    if 'build' in s:                      # a cut-short build must never look finished
+        del s['build']
+        inst.save_state(s)
+    if source is None and not inst.has_game():
+        raise RuntimeError('No game here yet: pick your GUNDAM BREAKER 3 PKG or dumped CUSA07651 folder.')
+    inst = install(folder, source, opts, log)
+    s = inst.state()
+    s['build'] = want
+    inst.save_state(s)
+    progress(1, 'Ready to play')
     return inst
 
 
@@ -527,6 +657,18 @@ def status(folder):
     sd = inst.save_dir()
     lines.append('Saves: %s' % (sd if os.path.isdir(sd) and os.listdir(sd) else 'none yet'))
     return lines
+
+
+def game_env():
+    """The environment for the game: without the AppImage's own Python/Tk settings."""
+    env = dict(os.environ)
+    for k in ('PYTHONHOME', 'PYTHONPATH', 'PYTHONDONTWRITEBYTECODE', 'PYTHONNOUSERSITE', 'TCL_LIBRARY',
+              'TK_LIBRARY', 'GB3R_ROOT', 'GB3R_PYCMD', 'LD_LIBRARY_PATH'):
+        env.pop(k, None)
+    appdir = os.environ.get('APPDIR')
+    if appdir:
+        env['PATH'] = os.pathsep.join(p for p in env.get('PATH', '').split(os.pathsep) if not p.startswith(appdir))
+    return env
 
 
 def play(folder, log=None):
