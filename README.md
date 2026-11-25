@@ -2,6 +2,8 @@
 
 <a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
 
+**Status:** tested by the author on Steam Deck (2026-11-25): installs from the PKG and plays.
+
 **How to play:** you need your own GUNDAM BREAKER 3 BREAK EDITION **base game, CUSA07651 v01.00**,
 as a fake-signed `.pkg` or a dumped `CUSA07651` folder (not an update PKG). Download
 `GB3-Recompiler-v…-Linux-x86_64.AppImage` from [Releases](https://github.com/Jazzneo/gb3-recompiler/releases),
