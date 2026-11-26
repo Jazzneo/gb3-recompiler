@@ -1,21 +1,47 @@
-# GB3 co-op server
+# GB3 co-op over the internet
 
-The Recompiler's co-op runs through a small shadNet server. You can run it three ways:
+The Recompiler's co-op runs through a small server that one player's Deck or PC hosts
+(**Network → Host on this device**). Friends on the same Wi-Fi just pick **Join a host** and **Search**.
+Friends somewhere else join the same way over **Tailscale**, a free virtual LAN. No ports to open, no
+server to rent.
 
-| Where | How | Who can join |
+| Where your friend is | Host picks | Friend picks |
 |---|---|---|
-| A Deck or PC at home | Recompiler → **Network** → *Local: host on this device* | Everyone on the same Wi-Fi/LAN (they pick *Local: join*) |
-| A free cloud VM | `install-server.sh` below | Anyone on the internet (they pick *Online server* and type its address once) |
-| Your own always-on Linux box | same script | same |
+| Same Wi-Fi / LAN | Friends join over: the same Wi-Fi / LAN | Join a host → Search |
+| No router (two Decks) | turn on a hotspot on the host Deck, Wi-Fi option | connect to that hotspot, Join → Search |
+| Anywhere (internet) | Friends join over: **Tailscale** | Join a host → Search (finds the host on Tailscale) |
 
-No ad hoc Wi-Fi is needed: for two Decks away from a router, turn on a hotspot on one of them
-(SteamOS Desktop Mode → network icon → Hotspot, or a phone hotspot), connect the other to it, and use
-*Local*.
+## Tailscale, step by step
 
-## Free online server (Oracle Cloud "Always Free", step by step)
+Tailscale is free for personal use (up to 100 devices). You make the account yourself on its website.
 
-Any x86-64 Linux VM works (Google Cloud e2-micro free tier, a home server, a cheap VPS). Oracle's
-free tier is the most generous:
+1. **Each player, once:** Recompiler → Network / co-op… → **Set up Tailscale…**. A terminal opens and
+   walks through it:
+   - **Steam Deck:** it installs Tailscale with Tailscale's own Deck installer
+     (github.com/tailscale-dev/deck-tailscale, a system extension that survives SteamOS updates). It
+     asks for your deck password. If you never set one: open Konsole and type `passwd` first.
+   - **Bazzite:** Tailscale is built in; it only signs in. Other Linux: it tells you the one install command.
+   - Then it prints a **login link** (and a QR code): open it, sign in or make a free account, approve
+     the device.
+2. **Connect the two players:** both sign in to the **same** Tailscale account, or the host shares their
+   device with the friend: login.tailscale.com → Machines → (host device) → **Share…** → send the invite.
+3. **Host:** Network → Host on this device → Friends join over: **Tailscale** → user name → Save → Play.
+   The window shows the host's Tailscale address (100.x.y.z) with a Copy button.
+4. **Friend:** Network → Join a host → **Search**: the host shows up as "(100.x.y.z, Tailscale)". Pick
+   it, or keep "Join the first host found automatically". User name → Save → Play.
+
+**Test connection** in the Network window checks everything without starting the game.
+
+Tailscale on the Deck keeps running in Game Mode after setup. To turn it off: Desktop Mode, Konsole,
+`sudo tailscale down` (back on: `sudo tailscale up`).
+
+## Advanced: your own always-on server (VPS)
+
+Only needed for a public server that is on when no player hosts. Any x86-64 Linux machine works
+(a cloud VM, a home server).
+
+### Example: Oracle Cloud "Always Free"
+
 
 1. Make an account at cloud.oracle.com (a card is asked for identity; Always Free resources are not
    charged).
@@ -37,7 +63,7 @@ free tier is the most generous:
    ```
    (For a newer release, change the version in both names.) Add `--key SOMETHING` to let only
    your friends create accounts.
-5. It prints `address <public IP>:31313`. Every player: Recompiler → **Network** → *Online server* →
+5. It prints `address <public IP>:31313`. Every player: Recompiler → **Network** → *Online server (advanced)* →
    that address (+ the key if you set one) → a user name → **Save**. Done; Play starts online.
 
 Update: download the new release and run the same `install-server.sh` again (accounts stay).
@@ -46,7 +72,8 @@ Logs: `journalctl -u gb3-server` and `/var/lib/gb3-server/shadnet.log`.
 
 ## Notes
 
-- Traffic is not encrypted (shadNet's plain TCP login, as on the LAN). Each player's password is
+- Over Tailscale everything is encrypted (WireGuard). On a plain LAN or a VPS it is not (shadNet's
+  plain TCP login). Each player's password is
   random and only used for this server; nothing else is at stake. Use `--key` on a public server.
 - Game traffic goes player to player. When routers block that, the server's relay (UDP 3478)
   carries it; that needs the VM's bandwidth, which the free tier has plenty of for 4 players.

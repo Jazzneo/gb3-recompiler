@@ -12,6 +12,8 @@ Modes (network.json in ~/.config/gb3-recompiler):
 
 PS4 GUNDAM BREAKER 3 has no real ad hoc mode: "Local" is a small shadNet server on one device of the
 same Wi-Fi/LAN (or the Deck's own hotspot), the others join it. Game traffic stays peer to peer.
+Over the internet, Tailscale (a free virtual LAN) makes friends "local": the host picks "friends join
+over Tailscale", joiners find it among their Tailscale peers.
 
 The user name is the shadNet account name, which the game shows as the Online ID in co-op. The
 account is created on the chosen server the first time (random password, kept 0600 in
@@ -39,8 +41,8 @@ import threading
 import time
 
 MODES = ('offline', 'lan-host', 'lan-join', 'online')
-MODE_NAMES = {'offline': 'Offline', 'lan-host': 'Local: host on this device',
-              'lan-join': 'Local: join a host on this network', 'online': 'Online server'}
+MODE_NAMES = {'offline': 'Offline', 'lan-host': 'Host on this device (Wi-Fi/LAN or Tailscale)',
+              'lan-join': 'Join a host (Wi-Fi/LAN or Tailscale)', 'online': 'Online server (advanced)'}
 PORT = 31313            # shadNet TCP; +1 = matching UDP (STUN/signaling), +2 = WebAPI HTTP
 RELAY_PORT = 3478       # P2P relay (UDP) for internet play behind NAT
 BEACON_PORT = 31399     # LAN discovery (UDP)
@@ -53,7 +55,8 @@ STATE_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('
 SERVER_DATA = os.path.join(STATE_DIR, 'server')
 SERVER_STATE = os.path.join(SERVER_DATA, 'serve.json')
 
-DEFAULTS = {'mode': 'offline', 'name': '', 'server': '', 'lan_host': 'auto', 'key': '', 'lan_port': PORT}
+DEFAULTS = {'mode': 'offline', 'name': '', 'server': '', 'lan_host': 'auto', 'key': '', 'lan_port': PORT,
+            'host_via': 'lan'}   # host_via: how friends reach a local host: 'lan' or 'tailscale'
 
 # shadNet error codes (src/protocol.h ErrorType) the account step can meet.
 ERR = {0: 'ok', 1: 'malformed', 3: 'invalid input', 5: 'login error', 6: 'already signed in',
@@ -168,6 +171,83 @@ def tcp_open(host, port, timeout=2.0):
         return False
 
 
+# ------------------------------------------------------------------ Tailscale
+
+TS_NET = (0x64400000, 0xffc00000)       # 100.64.0.0/10, Tailscale's address range
+
+
+def _ip_int(ip):
+    try:
+        return struct.unpack('!I', socket.inet_aton(ip))[0]
+    except OSError:
+        return None
+
+
+def is_tailscale_ip(ip):
+    n = _ip_int(ip or '')
+    return n is not None and n & TS_NET[1] == TS_NET[0]
+
+
+def tailscale_bin():
+    for d in os.environ.get('PATH', '').split(os.pathsep) + ['/usr/bin', '/usr/local/bin', '/opt/tailscale',
+                                                            os.path.expanduser('~/.local/bin')]:
+        c = os.path.join(d, 'tailscale')
+        if d and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def _tailscale_status():
+    ts = tailscale_bin()
+    if not ts:
+        return None
+    try:
+        r = subprocess.run([ts, 'status', '--json'], capture_output=True, text=True, timeout=5)
+        return json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def tailscale_ip():
+    """This device's Tailscale IPv4 address, or None (not installed / not signed in)."""
+    st = _tailscale_status()
+    if st and st.get('BackendState') == 'Running':
+        for ip in (st.get('Self') or {}).get('TailscaleIPs') or []:
+            if is_tailscale_ip(ip):
+                return ip
+    try:   # no CLI (or not in PATH): an address on the tailscale0 interface still counts
+        r = subprocess.run(['ip', '-4', '-o', 'addr', 'show'], capture_output=True, text=True, timeout=3)
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if 'inet' in parts:
+                ip = parts[parts.index('inet') + 1].split('/')[0]
+                if is_tailscale_ip(ip):
+                    return ip
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def tailscale_state():
+    """'on' (signed in, with an address), 'off' (installed, not up), 'missing'."""
+    if tailscale_ip():
+        return 'on'
+    return 'off' if tailscale_bin() else 'missing'
+
+
+def tailscale_peers():
+    """Online Tailscale peers: [{'ip', 'name'}]."""
+    st = _tailscale_status() or {}
+    out = []
+    for p in (st.get('Peer') or {}).values():
+        if not p.get('Online'):
+            continue
+        ip = next((a for a in p.get('TailscaleIPs') or [] if is_tailscale_ip(a)), None)
+        if ip:
+            out.append({'ip': ip, 'name': p.get('HostName') or ip})
+    return out
+
+
 # ------------------------------------------------------------------ LAN discovery
 
 def discover(wait=1.5, only=None):
@@ -209,6 +289,44 @@ def discover(wait=1.5, only=None):
             break
     s.close()
     return sorted(found.values(), key=lambda h: (h['name'], h['ip']))
+
+
+def discover_all(wait=1.5):
+    """Hosts on the LAN (broadcast) and on Tailscale (each online peer asked directly)."""
+    results = []
+    lock = threading.Lock()
+
+    def ask(ip, name):
+        for h in discover(min(wait, 1.2), only=ip):
+            h['via'] = 'tailscale'
+            h['name'] = h['name'] or name
+            with lock:
+                results.append(h)
+    threads = [threading.Thread(target=ask, args=(p['ip'], p['name']), daemon=True) for p in tailscale_peers()]
+    for t in threads:
+        t.start()
+    for h in discover(wait):
+        h['via'] = 'tailscale' if is_tailscale_ip(h['ip']) else 'lan'
+        results.append(h)
+    for t in threads:
+        t.join(wait + 1)
+    seen, out = set(), []
+    for h in sorted(results, key=lambda h: (h['via'] != 'lan', h['name'], h['ip'])):
+        key = (h['id'] or h['ip'], h['via'])
+        if key not in seen:
+            seen.add(key)
+            out.append(h)
+    return out
+
+
+def host_address(cfg):
+    """The address a local host's friends use (and its own game, so the server tells them that one)."""
+    if cfg.get('host_via') == 'tailscale':
+        ip = tailscale_ip()
+        if not ip:
+            raise RuntimeError('Tailscale is not running on this device (Network window: Set up Tailscale)')
+        return ip
+    return lan_ip()
 
 
 class Beacon(threading.Thread):
@@ -555,10 +673,11 @@ def target(cfg, install=None, until_pid=0, log=say):
     if mode == 'lan-host':
         if not install:
             raise RuntimeError('no install folder for the local server')
+        ip = host_address(cfg)
         st = server_start(install, cfg, until_pid=until_pid)
-        # Our own game must use the LAN address, not 127.0.0.1: the server hands that address
-        # to the other players as ours.
-        return lan_ip(), int(st.get('port', PORT)), st.get('id', ''), 'this device'
+        # Our own game must use the address friends reach us at, not 127.0.0.1: the server hands
+        # the address it sees to the other players as ours (LAN or Tailscale).
+        return ip, int(st.get('port', PORT)), st.get('id', ''), 'this device'
     if mode == 'lan-join':
         want = (cfg.get('lan_host') or 'auto').strip()
         if want and want != 'auto':
@@ -568,9 +687,10 @@ def target(cfg, install=None, until_pid=0, log=say):
                 raise RuntimeError('cannot find host %s' % host)
             hit = discover(1.0, only=ip)
             return ip, (hit[0]['port'] if hit else port), (hit[0]['id'] if hit else ''), host
-        hosts = discover(2.0)
+        hosts = discover_all(2.0)
         if not hosts:
-            raise RuntimeError('no co-op host found on this network (is "Host on this device" on there?)')
+            raise RuntimeError('no co-op host found on this network or on Tailscale '
+                               '(is "Local: host on this device" on there?)')
         h = hosts[0]
         if len(hosts) > 1:
             log('%d hosts found, using %s (%s); pick one in the Network window to change' % (len(hosts), h['name'], h['ip']))
@@ -635,6 +755,7 @@ def main(argv=None):
     p.add_argument('--server')
     p.add_argument('--lan-host')
     p.add_argument('--key')
+    p.add_argument('--via', choices=('lan', 'tailscale'), help='how friends reach a local host')
     p = sub.add_parser('discover')
     p.add_argument('--wait', type=float, default=1.5)
     p = sub.add_parser('account')
@@ -660,12 +781,16 @@ def main(argv=None):
     try:
         if a.cmd == 'status':
             st = server_running()
-            print('mode: %s\nname: %s\nonline server: %s\nlocal host: %s\nlocal server here: %s' % (
-                MODE_NAMES[cfg['mode']], cfg['name'] or '(none)', cfg['server'] or '(none)', cfg['lan_host'],
-                'running on port %d' % st['port'] if st else 'off'))
+            print('mode: %s\nname: %s\nonline server: %s\nlocal host: %s\nfriends join over: %s\n'
+                  'local server here: %s\nthis device: LAN %s, Tailscale %s' % (
+                      MODE_NAMES[cfg['mode']], cfg['name'] or '(none)', cfg['server'] or '(none)', cfg['lan_host'],
+                      cfg.get('host_via', 'lan'), 'running on port %d' % st['port'] if st else 'off',
+                      lan_ip(), tailscale_ip() or tailscale_state()))
         elif a.cmd == 'set':
             if a.name is not None and a.name and not valid_name(a.name):
                 raise RuntimeError('user name must be 3-16 letters, digits, - or _')
+            if a.via:
+                cfg['host_via'] = a.via
             for k in ('mode', 'name', 'server', 'lan_host', 'key'):
                 v = getattr(a, k)
                 if v is not None:
@@ -673,9 +798,9 @@ def main(argv=None):
             save(cfg)
             print('saved: %s' % MODE_NAMES[cfg['mode']])
         elif a.cmd == 'discover':
-            hosts = discover(a.wait)
+            hosts = discover_all(a.wait)
             for h in hosts:
-                print('%s\t%s:%d' % (h['name'], h['ip'], h['port']))
+                print('%s\t%s:%d\t%s' % (h['name'], h['ip'], h['port'], h['via']))
             if not hosts:
                 print('no co-op host found')
         elif a.cmd == 'account':

@@ -51,6 +51,7 @@ done
 
 # Network mode: gb3net.py runs before every launch (play.sh); the co-op server; agreement text.
 cp -p "$here/app/gb3r/net.py" "$appdir/runtime/psport/gb3net.py"
+cp -p "$here/app/gb3r/tailscale-setup.sh" "$appdir/runtime/psport/gb3-tailscale-setup.sh"
 cp -dR --preserve=mode,timestamps,links "$here/build/shadnet-runtime" "$appdir/runtime/shadnet"
 mkdir -p "$appdir/runtime/tss"
 cp -p "$here/data/tss/"*.txt "$appdir/runtime/tss/"

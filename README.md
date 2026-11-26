@@ -57,17 +57,17 @@ RecompLauncher, starts in that mode. No launch options to type.
 | Mode | Use it for |
 |---|---|
 | Offline | default, no network |
-| Local: host on this device | this Deck/PC runs the co-op server for the Wi-Fi/LAN. It starts with Play and stops with the game (or **Start server** to keep it on) |
-| Local: join a host on this network | the host is found automatically (UDP broadcast); or pick one from the list / type its address |
-| Online server | an internet server: its address (and key, if it has one) typed once |
+| Host on this device | this Deck/PC runs the co-op server. Friends join over the same Wi-Fi/LAN or over **Tailscale** (free virtual LAN, for friends anywhere). Starts with Play, stops with the game (or **Start server**) |
+| Join a host | **Search** finds hosts on the Wi-Fi (broadcast) and on Tailscale (your peers); or pick one / type its address |
+| Online server (advanced) | an always-on server of your own (VPS): its address (and key) typed once |
 
 - **User name**: your Online ID in co-op (3-16 letters, digits, `-`, `_`). The account is created on
   the server the first time you play, with a random password kept in
   `~/.config/gb3-recompiler/accounts.json` (only readable by you).
-- No router? Turn on a hotspot on one Deck, connect the other to it, use *Local*. (PS4 GB3 has no
-  real ad hoc mode; this is the same thing.)
-- A free internet server for friends: `server/README.md` (Oracle Cloud Always Free, one command:
-  `sudo bash server/install-server.sh`).
+- No router? Turn on a hotspot on one Deck, connect the other to it, use the Wi-Fi option. (PS4 GB3
+  has no real ad hoc mode; this is the same thing.)
+- Friends elsewhere: **Set up Tailscale…** in the Network window installs it (Deck: Tailscale's own
+  deck-tailscale installer) and signs in; guide in the window (**Guide…**) and `server/README.md`.
 - **Test connection** in the window checks the server and creates the account without starting
   the game. `GB3R_NET=offline bash play.sh` plays offline once.
 - Ports: TCP 31313 + 31315, UDP 31314, 3478 (relay, online), 31399 (LAN discovery).

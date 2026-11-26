@@ -63,34 +63,84 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
     f.rowconfigure(7, weight=1)
 
     # --- lan-host
+    def setup_tailscale():
+        script = os.path.join(install_dir(), 'psport', 'gb3-tailscale-setup.sh')
+        if not os.path.exists(script):
+            script = os.path.join(core.HERE, 'tailscale-setup.sh')
+        env = core.game_env()
+        for term in (['konsole', '-e'], ['kgx', '--'], ['gnome-terminal', '--'], ['xfce4-terminal', '-x'],
+                     ['xterm', '-e']):
+            if any(os.access(os.path.join(d, term[0]), os.X_OK) for d in env.get('PATH', '').split(os.pathsep)):
+                subprocess.Popen(term + ['bash', script], env=env, start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                log('Tailscale setup opened in a terminal window')
+                return
+        messagebox.showinfo('Network', 'No terminal found. Run this in a terminal:\nbash %s' % script, parent=w)
+
     host_f = ttk.Frame(box, style='Card.TFrame')
     host_f.columnconfigure(0, weight=1)
     host_state = tk.StringVar()
     ttk.Label(host_f, textvariable=host_state, style='Card.TLabel', wraplength=ww - 60, justify='left').grid(row=0, column=0, columnspan=3, sticky='w')
+    via_row = ttk.Frame(host_f, style='Card.TFrame')
+    via_row.grid(row=1, column=0, columnspan=3, sticky='w', pady=(8, 0))
+    ttk.Label(via_row, text='Friends join over:', style='Card.TLabel').pack(side='left')
+    via_var = tk.StringVar(value=cfg.get('host_via', 'lan'))
+    ttk.Radiobutton(via_row, text='the same Wi-Fi / LAN', value='lan', variable=via_var,
+                    style='Card.TRadiobutton').pack(side='left', padx=(10, 0))
+    ttk.Radiobutton(via_row, text='Tailscale (over the internet)', value='tailscale', variable=via_var,
+                    style='Card.TRadiobutton').pack(side='left', padx=(10, 0))
+    addr_row = ttk.Frame(host_f, style='Card.TFrame')
+    addr_row.grid(row=2, column=0, columnspan=3, sticky='w', pady=(6, 0))
+    addr_var = tk.StringVar()
+    ttk.Label(addr_row, textvariable=addr_var, style='Card.TLabel').pack(side='left')
+
+    def copy_addr():
+        a = addr_var.get().rsplit(' ', 1)[-1]
+        w.clipboard_clear()
+        w.clipboard_append(a)
+        log('Copied %s' % a)
+    copy_b = ttk.Button(addr_row, text='Copy', command=copy_addr)
+    copy_b.pack(side='left', padx=(10, 0))
+    ts_row = ttk.Frame(host_f, style='Card.TFrame')
+    ts_row.grid(row=3, column=0, columnspan=3, sticky='w', pady=(6, 0))
+    ts_var = tk.StringVar()
+    ttk.Label(ts_row, textvariable=ts_var, style='Dim.TLabel').pack(side='left')
+    ttk.Button(ts_row, text='Set up Tailscale…', command=setup_tailscale).pack(side='left', padx=(10, 0))
     ttk.Label(host_f, style='Dim.TLabel', wraplength=ww - 60, justify='left', text=(
-        'The co-op server starts by itself when you press Play and stops when your game closes. '
-        'Start it here to keep it on for the others without playing. The other players pick '
-        '"Local: join" on the same Wi-Fi/LAN (away from a router: turn on a hotspot on one Deck and '
-        'connect the other to it).')).grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 6))
+        'The co-op server starts by itself when you press Play and stops when your game closes; '
+        'Start server keeps it on without playing. Friends pick "Join" and find you with Search '
+        '(Tailscale: they need Tailscale too, signed in to your account or with your device shared). '
+        'No router nearby? Turn on a hotspot on one Deck and use the Wi-Fi option.')).grid(row=4, column=0, columnspan=3, sticky='w', pady=(8, 6))
     hb = ttk.Frame(host_f, style='Card.TFrame')
-    hb.grid(row=2, column=0, columnspan=3, sticky='w')
+    hb.grid(row=5, column=0, columnspan=3, sticky='w')
     start_b = ttk.Button(hb, text='Start server')
     stop_b = ttk.Button(hb, text='Stop server')
     start_b.pack(side='left')
     stop_b.pack(side='left', padx=(6, 0))
 
-    def host_refresh():
+    def host_refresh(*_):
         st = net.server_running()
-        ip = net.lan_ip()
-        host_state.set('Server: %s.   This device on the network: %s' % (
-            'running (port %d)' % st['port'] if st else 'off', ip))
+        host_state.set('Server: %s' % ('running (port %d)' % st['port'] if st else 'off'))
         start_b.state(['disabled'] if st else ['!disabled'])
         stop_b.state(['!disabled'] if st else ['disabled'])
+        tip = net.tailscale_ip()
+        ts_var.set('Tailscale: %s' % (tip if tip else {'off': 'installed, not signed in',
+                                                       'missing': 'not installed'}[net.tailscale_state()]))
+        if via_var.get() == 'tailscale':
+            addr_var.set('Friends join this address: %s' % tip if tip else 'Tailscale is not on yet: Set up Tailscale first')
+            copy_b.state(['!disabled'] if tip else ['disabled'])
+        else:
+            addr_var.set('Friends on this Wi-Fi join this address: %s' % net.lan_ip())
+            copy_b.state(['!disabled'])
+    via_var.trace_add('write', host_refresh)
 
     # --- lan-join
     join_f = ttk.Frame(box, style='Card.TFrame')
     join_f.columnconfigure(0, weight=1)
-    ttk.Label(join_f, text='Hosts on this network', style='Card.TLabel').grid(row=0, column=0, sticky='w')
+    jl = ttk.Frame(join_f, style='Card.TFrame')
+    jl.grid(row=0, column=0, columnspan=3, sticky='w')
+    ttk.Label(jl, text='Hosts on this network and on Tailscale', style='Card.TLabel').pack(side='left')
+    ttk.Button(jl, text='Set up Tailscale…', command=setup_tailscale).pack(side='left', padx=(12, 0))
     hosts_lb = tk.Listbox(join_f, height=5, background='#0d1218', foreground=FG, selectbackground='#38455a',
                           relief='flat', exportselection=False)
     hosts_lb.grid(row=1, column=0, columnspan=2, sticky='nsew', pady=(4, 0))
@@ -118,7 +168,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         hosts_lb.insert('end', 'searching...')
 
         def work():
-            hs = net.discover(2.0)
+            hs = net.discover_all(2.0)
             w.after(0, lambda: show(hs))
         threading.Thread(target=work, daemon=True).start()
 
@@ -126,9 +176,9 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         found[:] = hs
         hosts_lb.delete(0, 'end')
         for h in hs:
-            hosts_lb.insert('end', '%s   (%s)' % (h['name'] or '?', h['ip']))
+            hosts_lb.insert('end', '%s   (%s, %s)' % (h['name'] or '?', h['ip'], 'Tailscale' if h.get('via') == 'tailscale' else 'Wi-Fi/LAN'))
         if not hs:
-            hosts_lb.insert('end', 'none found: is "Local: host on this device" on there, on the same network?')
+            hosts_lb.insert('end', 'none found: is the host\'s server on (Play or Start server), on this Wi-Fi or on Tailscale?')
         search_b.state(['!disabled'])
     search_b.configure(command=search)
 
@@ -142,8 +192,9 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
     key_var = tk.StringVar(value=cfg.get('key', ''))
     ttk.Entry(on_f, textvariable=key_var, width=24, show='•').grid(row=1, column=1, sticky='w', padx=(8, 0), pady=(6, 0))
     ttk.Label(on_f, style='Dim.TLabel', wraplength=ww - 60, justify='left', text=(
-        'example: 203.0.113.7  or  gb3.example.net:31313. A free server takes about 15 minutes on '
-        'Oracle Cloud\'s Always Free tier: one command, see the guide.')).grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 4))
+        'example: 203.0.113.7  or  gb3.example.net:31313, a server that is always on (your own VPS: see '
+        'the guide, "Advanced"). For playing with friends over the internet, Tailscale + Local host/join is '
+        'simpler and free.')).grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 4))
 
     def readable(md):
         # Markdown, joined into paragraphs and without ** / ` marks, for the plain text view.
@@ -193,7 +244,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         # Shown right here: works on every system, also without a browser or a .md viewer.
         text = guide_text()
         g = tk.Toplevel(w)
-        g.title('Free online server guide')
+        g.title('Co-op over the internet: guide')
         g.configure(background=PANEL)
         g.transient(w)
         g.geometry('%dx%d+%d+%d' % (ww, wh, max(0, (sw - ww) // 2), max(0, (sh - wh) // 3)))
@@ -225,7 +276,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         ttk.Button(gb, text='Close', command=g.destroy).pack(side='left', padx=(8, 0))
         g.grab_set()
 
-    ttk.Button(on_f, text='Free server guide…', command=open_guide).grid(row=3, column=0, sticky='w')
+    ttk.Button(on_f, text='Guide…', command=open_guide).grid(row=3, column=0, sticky='w')
 
     panels = {'lan-host': host_f, 'lan-join': join_f, 'online': on_f}
 
@@ -253,6 +304,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         c['name'] = name_var.get().strip()
         c['server'] = server_var.get().strip()
         c['key'] = key_var.get().strip()
+        c['host_via'] = via_var.get()
         c['lan_host'] = 'auto' if join_auto.get() or not manual_var.get().strip() else manual_var.get().strip()
         return c
 
@@ -263,6 +315,8 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
             return 'Pick a user name first (3-16 letters, digits, - or _).'
         if c['mode'] == 'online' and not c['server']:
             return 'Type the online server\'s address.'
+        if c['mode'] == 'lan-host' and c['host_via'] == 'tailscale' and not net.tailscale_ip():
+            return 'Tailscale is not on on this device: press "Set up Tailscale…" first (or pick Wi-Fi/LAN).'
         if c['mode'] == 'lan-host' and not os.path.exists(os.path.join(net.shadnet_dir(install_dir()), 'shadnet')):
             return 'The co-op server is not installed yet: press Install / Apply options once (needs this version).'
         return None
