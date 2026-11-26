@@ -15,8 +15,8 @@ scope=$(cd -- "$here/../GB3-Port-Scope" && pwd -P)
 launcher=$(cd -- "$here/../GB3-Launcher" && pwd -P)
 appdir=${1:-$here/build/AppDir}
 
-NET_LIB=$scope/psport-bundle/out/gpu/libpsport-net.so      # online module (TSS agreement build)
-NET_MD5=baada4421c338537df7e1e6f0bbb2580
+NET_LIB=$scope/psport-bundle/out/gpu/libpsport-net.so      # online module (TSS agreement + Matching2 lock build)
+NET_MD5=c28606e1df28e20672072afe1dd8f9d8
 [[ $(md5sum < "$NET_LIB" | cut -d' ' -f1) == "$NET_MD5" ]] || { echo "online module md5 mismatch" >&2; exit 1; }
 for so in libmbedtls.so.21 libmbedx509.so.7 libmbedcrypto.so.16 libminiupnpc.so.21 libeverest.so libp256m.so; do
     [[ -e $scope/psport-bundle/lib/$so ]] || { echo "online module library $so missing from psport-bundle/lib" >&2; exit 1; }

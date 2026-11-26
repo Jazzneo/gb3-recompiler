@@ -24,7 +24,7 @@ sha256.
 
 | Fix / mod | On by default | What it does |
 |---|---|---|
-| psport runtime (patched v0.2.0) | always | save fix (no endless SAVING), pad open fix, PSN sign-in question skipped, mission-end crash fix (`PS_LOW_FLEXIBLE`), F1 menu so L3+R3 reach the game |
+| psport runtime (patched v0.2.0) | always | save fix (no endless SAVING), pad open fix, PSN sign-in question skipped, mission-end crash fix (`PS_LOW_FLEXIBLE`), start-up crash fix (the game's memory no longer lands on psport's own heap, which crashed about every other boot), co-op crash fix (Matching2 peer list lock), F1 menu so L3+R3 reach the game |
 | Shop box lighting fix | always | GPU library with the back-face normal flip guard (`ShaderBinaryVersion` 17); the first run rebuilds the shader cache |
 | 720p render patch v2.6 + shader fix | yes | eboot patch `GB3-render-720p.xml` (33 writes, applied in memory by psport) plus 7 shader records: steady 30 FPS on a Steam Deck |
 | Xbox button art | yes | A/B/X/Y glyphs in all three fonts, controller pictures, layout presets, blue EX prompts, skill-slot badges (loose copies and the HUD bundles in archive 000) |
@@ -141,7 +141,7 @@ bash packaging/build-appimage.sh                  # -> dist/GB3-Recompiler-v<ver
 ```
 
 `build-appimage.sh` stages the runtime from `GB3-Port-Scope` (patched `out/psport`, the box-fix
-`libpsport-gpu.so` md5 `e4cf03f2…`), bundles Fedora 45's Python 3 + Tk (run through the psport
+`libpsport-gpu.so` md5 `e4cf03f2…`, the online module `libpsport-net.so` md5 `c28606e1…`), bundles Fedora 45's Python 3 + Tk (run through the psport
 bundle's own glibc loader, so it works on SteamOS without `python3-tk`), and packs it with the
 static AppImage type-2 runtime. The stage step refuses to pack any `eboot.bin`, `.dat`, `.pkg`,
 `.tex`, save or shader-cache file.
