@@ -10,6 +10,7 @@
     gb3r restore [--dir DIR]                             put the original game files back
     gb3r status [--dir DIR]
     gb3r import-saves [--dir DIR] [--from BUNDLE]
+    gb3r net status|set|discover|account|server ...    network mode (see net.py; the window has all of it)
 """
 import argparse
 import os
@@ -50,6 +51,12 @@ def launcher_mode(argv):
 
 
 def cli(argv):
+    if argv[:1] == ['net']:
+        from . import net
+        rest = argv[1:]
+        if rest[:1] in (['server'], ['account']) and '--install' not in rest:
+            rest += ['--install', core.load_config()['install_dir']]
+        return net.main(rest)
     if '--play' in argv or '--prepare' in argv:
         return launcher_mode(argv)
     ap = argparse.ArgumentParser(prog='gb3r', description=core.APP_NAME)

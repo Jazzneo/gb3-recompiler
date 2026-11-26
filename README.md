@@ -49,6 +49,31 @@ menu banners, and the PS4 pad pictures on loading screens.
    **GUNDAM BREAKER 3 (psport)** (the installer adds that menu entry; it runs `play.sh` in the
    install folder).
 
+### Co-op (Network mode, 1.2.0)
+
+**Network / co-op…** (card 1) sets it once; every Play after that, from the window, Steam or
+RecompLauncher, starts in that mode. No launch options to type.
+
+| Mode | Use it for |
+|---|---|
+| Offline | default, no network |
+| Local: host on this device | this Deck/PC runs the co-op server for the Wi-Fi/LAN. It starts with Play and stops with the game (or **Start server** to keep it on) |
+| Local: join a host on this network | the host is found automatically (UDP broadcast); or pick one from the list / type its address |
+| Online server | an internet server: its address (and key, if it has one) typed once |
+
+- **User name**: your Online ID in co-op (3-16 letters, digits, `-`, `_`). The account is created on
+  the server the first time you play, with a random password kept in
+  `~/.config/gb3-recompiler/accounts.json` (only readable by you).
+- No router? Turn on a hotspot on one Deck, connect the other to it, use *Local*. (PS4 GB3 has no
+  real ad hoc mode; this is the same thing.)
+- A free internet server for friends: `server/README.md` (Oracle Cloud Always Free, one command:
+  `sudo bash server/install-server.sh`).
+- **Test connection** in the window checks the server and creates the account without starting
+  the game. `GB3R_NET=offline bash play.sh` plays offline once.
+- Ports: TCP 31313 + 31315, UDP 31314, 3478 (relay, online), 31399 (LAN discovery).
+- The first online start shows the game's online User Agreement once (Recompiler text, not
+  Bandai Namco's): accept it.
+
 ### RecompLauncher
 
 The release carries `recomplauncher.json` (inside the AppImage at `/recomplauncher.json`, and at the
@@ -85,6 +110,8 @@ In game, **F1** opens the psport menu (quit, settings).
 ./GB3-Recompiler…AppImage --play [--dir DIR] [--60|--uncap|--async]   # start the installed game
 ./GB3-Recompiler…AppImage --prepare --game=PKG_OR_FOLDER --dir DIR [--xbox] [--720p]
                                        # windowless setup with "progress 0.4 Text" lines
+./GB3-Recompiler…AppImage net set --mode lan-host|lan-join|online|offline --name NAME [--server HOST:PORT] [--key K]
+./GB3-Recompiler…AppImage net status | discover | account | server start|stop|status
 bash ~/Games/GB3-Recompiler/play.sh --check   # what psport would use, launches nothing
 ```
 
@@ -97,7 +124,9 @@ If FUSE is not available, add `--appimage-extract-and-run` before the arguments.
   CUSA07651/        the unpacked game (mods applied here)
   psport-bundle/    psport; saves in user/savedata/1/CUSA03489, the 720p XML in patches/
   psport/           launch scripts (play-gb3.sh, common.sh, fix-interp.py, ...)
-  play.sh           start the game
+  play.sh           start the game (applies the Network mode first)
+  shadnet/          the co-op server (for "Local: host on this device")
+  server-guide.md   how to set up a free online server
   gb3r.json         what was installed, with which options
 ```
 

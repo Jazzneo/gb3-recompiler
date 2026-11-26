@@ -15,6 +15,13 @@ scope=$(cd -- "$here/../GB3-Port-Scope" && pwd -P)
 launcher=$(cd -- "$here/../GB3-Launcher" && pwd -P)
 appdir=${1:-$here/build/AppDir}
 
+NET_LIB=$scope/psport-bundle/out/gpu/libpsport-net.so      # online module (TSS agreement build)
+NET_MD5=baada4421c338537df7e1e6f0bbb2580
+[[ $(md5sum < "$NET_LIB" | cut -d' ' -f1) == "$NET_MD5" ]] || { echo "online module md5 mismatch" >&2; exit 1; }
+for so in libmbedtls.so.21 libmbedx509.so.7 libmbedcrypto.so.16 libminiupnpc.so.21 libeverest.so libp256m.so; do
+    [[ -e $scope/psport-bundle/lib/$so ]] || { echo "online module library $so missing from psport-bundle/lib" >&2; exit 1; }
+done
+[[ -x $here/build/shadnet-runtime/shadnet ]] || bash "$here/packaging/bundle-shadnet.sh"
 GPU_LIB=$scope/psport-src/out-bundlecompat-boxfix/gpu/libpsport-gpu.so
 GPU_MD5=e4cf03f2c823276bc2cf0735f895dfa5
 [[ $(md5sum < "$GPU_LIB" | cut -d' ' -f1) == "$GPU_MD5" ]] || { echo "boxfix GPU library md5 mismatch" >&2; exit 1; }
@@ -30,14 +37,25 @@ cp -dR --preserve=mode,timestamps,links "$src/lib" "$src/LICENSE" "$src/LICENSES
 rm -f "$b/lib/interp"
 cp -dR --preserve=mode,timestamps,links "$src/out/psport" "$src/out/psport-gpu-capabilities" "$b/out/"
 cp -dR --preserve=mode,timestamps,links "$GPU_LIB" "$b/out/gpu/libpsport-gpu.so"
+cp -dR --preserve=mode,timestamps,links "$NET_LIB" "$b/out/gpu/libpsport-net.so"
+cp -dR --preserve=mode,timestamps,links "$src/scripts" "$b/"
+find "$b/scripts" -name __pycache__ -prune -exec rm -rf {} +
 mkdir -p "$b/patches" "$b/user"
 cp -dR --preserve=mode,timestamps,links "$src/patches/README" "$b/patches/" 2>/dev/null || true
 # The GPU library above is built from GB3-Port-Scope/psport-src (tag v0.2.0 + local patches).
-printf 'psport v0.2.0-gb3 host %s gpu %s\n' "$(md5sum < "$b/out/psport" | cut -c1-12)" "${GPU_MD5:0:12}" > "$b/RUNTIME-VERSION"
+printf 'psport v0.2.0-gb3 host %s gpu %s net %s\n' "$(md5sum < "$b/out/psport" | cut -c1-12)" "${GPU_MD5:0:12}" "${NET_MD5:0:12}" > "$b/RUNTIME-VERSION"
 
 for f in play-gb3.sh common.sh fix-interp.py artifact-debug.sh gb3-capture.sh deck-gpu.sh; do
     cp -dR --preserve=mode,timestamps,links "$scope/psport/$f" "$appdir/runtime/psport/"
 done
+
+# Network mode: gb3net.py runs before every launch (play.sh); the co-op server; agreement text.
+cp -p "$here/app/gb3r/net.py" "$appdir/runtime/psport/gb3net.py"
+cp -dR --preserve=mode,timestamps,links "$here/build/shadnet-runtime" "$appdir/runtime/shadnet"
+mkdir -p "$appdir/runtime/tss"
+cp -p "$here/data/tss/"*.txt "$appdir/runtime/tss/"
+cp -dR --preserve=mode,timestamps,links "$here/server" "$appdir/server"
+cp -p "$here/app/gb3r/net.py" "$appdir/server/gb3net.py"
 
 cp -dR --preserve=mode,timestamps,links "$launcher/bin/ps4-pkg-tool" "$launcher/bin/LICENSE-ps4-pkg-tool.txt" "$appdir/bin/"
 cp -dR --preserve=mode,timestamps,links "$here/data/patchdata.json" "$here/data/patchdata.bin" "$here/data/patches" "$appdir/data/"

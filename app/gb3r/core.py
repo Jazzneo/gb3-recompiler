@@ -18,7 +18,7 @@ import time
 from . import gdat
 
 APP_NAME = 'Recompiler Gundam Breaker 3 Break Edition'
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
 TITLE = 'CUSA07651'
 SAVE_TITLE = 'CUSA03489'
 
@@ -402,11 +402,43 @@ def step_runtime(inst, log):
         for fn in files:
             if fn.endswith('.sh') or fn.endswith('.py'):
                 os.chmod(os.path.join(root, fn), 0o755)
+    step_network(inst, log)
     for p in ('out/psport', 'out/psport-gpu-capabilities', 'lib/ld-linux-x86-64.so.2', 'run.sh', 'relocate.sh'):
         fp = os.path.join(inst.bundle, p)
         if os.path.exists(fp):
             os.chmod(fp, 0o755)
     fix_interp(inst, log)
+
+
+def step_network(inst, log):
+    """Co-op pieces: the local co-op server (shadnet/) and the online agreement text the game asks
+    for (user/tss/5-8.txt, kept if already there). Network mode itself is psport/gb3net.py."""
+    src = os.path.join(RUNTIME, 'shadnet')
+    if os.path.isdir(src):
+        dst = os.path.join(inst.dir, 'shadnet')
+        marker = lambda d: os.path.join(d, 'shadnet')
+        same = (os.path.exists(marker(dst)) and os.path.getsize(marker(dst)) == os.path.getsize(marker(src))
+                and file_sha256(marker(dst)) == file_sha256(marker(src)))
+        if not same:
+            if os.path.lexists(dst):
+                if os.path.isdir(dst) and not os.path.islink(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.unlink(dst)
+            _copytree(src, dst)
+            for p in ('shadnet', 'lib/ld-linux-x86-64.so.2'):
+                os.chmod(os.path.join(dst, p), 0o755)
+            log('Co-op server installed (for "Host on this device")')
+    guide = os.path.join(ROOT, 'server', 'README.md')
+    if os.path.exists(guide):
+        shutil.copy2(guide, os.path.join(inst.dir, 'server-guide.md'))
+    tss_src = os.path.join(RUNTIME, 'tss')
+    if os.path.isdir(tss_src):
+        tss = os.path.join(inst.bundle, 'user', 'tss')
+        os.makedirs(tss, exist_ok=True)
+        for fn in os.listdir(tss_src):
+            if not os.path.exists(os.path.join(tss, fn)):
+                shutil.copy2(os.path.join(tss_src, fn), os.path.join(tss, fn))
 
 
 def python_cmd():
@@ -473,6 +505,13 @@ export DATA="$here/psport-bundle" USERDIR="$here/psport-bundle/user"
 # The shop box fix GPU library carries an experimental GB3 profile; keep it off (it breaks the 720p path).
 export PS_GAME_PROFILE=${PS_GAME_PROFILE:-none}
 export PS_NO_TERMINAL=${PS_NO_TERMINAL:-1}
+# Network mode (Recompiler window > Network: offline, local host/join or an online server). It picks
+# the server, makes sure the account (your user name) exists and exports psport's online settings.
+# Offline unless chosen there; GB3R_NET=offline skips it for one launch.
+if [[ ${GB3R_NET:-} != offline && -f "$here/psport/gb3net.py" ]] && command -v python3 >/dev/null 2>&1; then
+    net_env=$(env -u LD_PRELOAD -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH \
+              python3 "$here/psport/gb3net.py" launch-env --install "$here" --game-pid $$) && eval "$net_env"
+fi
 %(extra)sexec bash "$here/psport/play-gb3.sh" %(args)s"$@"
 '''
 
@@ -613,6 +652,7 @@ def apply_options(folder, opts, log):
     if not inst.has_game():
         raise RuntimeError('No game installed in %s' % inst.dir)
     known = check_game(inst, log)
+    step_runtime(inst, log)          # a newer tool brings a newer runtime / co-op pieces
     want = step_mods(inst, opts, log, known)
     write_play(inst, opts, log)
     s = inst.state()
@@ -654,6 +694,12 @@ def status(folder):
             lines.append('Mods: cannot read (%s)' % e)
         xml = os.path.join(inst.bundle, 'patches', PATCH_XML)
         lines.append('720p eboot patch: %s' % ('on' if os.path.exists(xml) else 'off'))
+    try:
+        from . import net
+        c = net.load()
+        lines.append('Network: %s%s' % (net.MODE_NAMES[c['mode']], ' as %s' % c['name'] if c['mode'] != 'offline' and c['name'] else ''))
+    except Exception:  # noqa: BLE001 - status must never fail
+        pass
     sd = inst.save_dir()
     lines.append('Saves: %s' % (sd if os.path.isdir(sd) and os.listdir(sd) else 'none yet'))
     return lines
