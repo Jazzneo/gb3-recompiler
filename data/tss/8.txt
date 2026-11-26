@@ -1,0 +1,15 @@
+<EULA VERSION>
+1
+<EULA BODY>
+GUNDAM BREAKER 3 private co-op server.
+
+This server is run by you for your own games on your own network.
+It is not operated by or affiliated with Bandai Namco or Sony.
+Accounts and matchmaking data stay on your PC.
+</EULA BODY>
+<PRIVACY VERSION>
+1
+<PRIVACY BODY>
+This private server keeps only your online ID, password and game rooms.
+Nothing is sent to anyone else.
+</PRIVACY BODY>

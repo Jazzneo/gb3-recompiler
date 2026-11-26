@@ -27,7 +27,7 @@ sha256.
 
 | Fix / mod | On by default | What it does |
 |---|---|---|
-| psport runtime (patched v0.2.0) | always | save fix (no endless SAVING), pad open fix, PSN sign-in question skipped, mission-end crash fix (`PS_LOW_FLEXIBLE`), F1 menu so L3+R3 reach the game |
+| psport runtime (patched v0.2.0) | always | save fix (no endless SAVING), pad open fix, PSN sign-in question skipped, mission-end crash fix (`PS_LOW_FLEXIBLE`), start-up crash fix (the game's memory no longer lands on psport's own heap, which crashed about every other boot), co-op crash fix (Matching2 peer list lock), F1 menu so L3+R3 reach the game |
 | Shop box lighting fix | always | GPU library with the back-face normal flip guard (`ShaderBinaryVersion` 17); the first run rebuilds the shader cache |
 | 720p render patch v2.6 + shader fix | yes | eboot patch `GB3-render-720p.xml` (33 writes, applied in memory by psport) plus 7 shader records: steady 30 FPS on a Steam Deck |
 | Xbox button art | yes | A/B/X/Y glyphs in all three fonts, controller pictures, layout presets, blue EX prompts, skill-slot badges (loose copies and the HUD bundles in archive 000) |
@@ -51,6 +51,31 @@ menu banners, and the PS4 pad pictures on loading screens.
 5. **Play**, or for Game Mode: Steam → *Add a Non-Steam Game* → tick
    **GUNDAM BREAKER 3 (psport)** (the installer adds that menu entry; it runs `play.sh` in the
    install folder).
+
+### Co-op (Network mode, 1.2.0)
+
+**Network / co-op…** (card 1) sets it once; every Play after that, from the window, Steam or
+RecompLauncher, starts in that mode. No launch options to type.
+
+| Mode | Use it for |
+|---|---|
+| Offline | default, no network |
+| Host on this device | this Deck/PC runs the co-op server. Friends join over the same Wi-Fi/LAN or over **Tailscale** (free virtual LAN, for friends anywhere). Starts with Play, stops with the game (or **Start server**) |
+| Join a host | **Search** finds hosts on the Wi-Fi (broadcast) and on Tailscale (your peers); or pick one / type its address |
+| Online server (advanced) | an always-on server of your own (VPS): its address (and key) typed once |
+
+- **User name**: your Online ID in co-op (3-16 letters, digits, `-`, `_`). The account is created on
+  the server the first time you play, with a random password kept in
+  `~/.config/gb3-recompiler/accounts.json` (only readable by you).
+- No router? Turn on a hotspot on one Deck, connect the other to it, use the Wi-Fi option. (PS4 GB3
+  has no real ad hoc mode; this is the same thing.)
+- Friends elsewhere: **Set up Tailscale…** in the Network window installs it (Deck: Tailscale's own
+  deck-tailscale installer) and signs in; guide in the window (**Guide…**) and `server/README.md`.
+- **Test connection** in the window checks the server and creates the account without starting
+  the game. `GB3R_NET=offline bash play.sh` plays offline once.
+- Ports: TCP 31313 + 31315, UDP 31314, 3478 (relay, online), 31399 (LAN discovery).
+- The first online start shows the game's online User Agreement once (Recompiler text, not
+  Bandai Namco's): accept it.
 
 ### RecompLauncher
 
@@ -88,6 +113,8 @@ In game, **F1** opens the psport menu (quit, settings).
 ./GB3-Recompiler…AppImage --play [--dir DIR] [--60|--uncap|--async]   # start the installed game
 ./GB3-Recompiler…AppImage --prepare --game=PKG_OR_FOLDER --dir DIR [--xbox] [--720p]
                                        # windowless setup with "progress 0.4 Text" lines
+./GB3-Recompiler…AppImage net set --mode lan-host|lan-join|online|offline --name NAME [--server HOST:PORT] [--key K]
+./GB3-Recompiler…AppImage net status | discover | account | server start|stop|status
 bash ~/Games/GB3-Recompiler/play.sh --check   # what psport would use, launches nothing
 ```
 
@@ -100,7 +127,9 @@ If FUSE is not available, add `--appimage-extract-and-run` before the arguments.
   CUSA07651/        the unpacked game (mods applied here)
   psport-bundle/    psport; saves in user/savedata/1/CUSA03489, the 720p XML in patches/
   psport/           launch scripts (play-gb3.sh, common.sh, fix-interp.py, ...)
-  play.sh           start the game
+  play.sh           start the game (applies the Network mode first)
+  shadnet/          the co-op server (for "Local: host on this device")
+  server-guide.md   how to set up a free online server
   gb3r.json         what was installed, with which options
 ```
 
@@ -115,7 +144,7 @@ bash packaging/build-appimage.sh                  # -> dist/GB3-Recompiler-v<ver
 ```
 
 `build-appimage.sh` stages the runtime from `GB3-Port-Scope` (patched `out/psport`, the box-fix
-`libpsport-gpu.so` md5 `e4cf03f2…`), bundles Fedora 45's Python 3 + Tk (run through the psport
+`libpsport-gpu.so` md5 `e4cf03f2…`, the online module `libpsport-net.so` md5 `c28606e1…`), bundles Fedora 45's Python 3 + Tk (run through the psport
 bundle's own glibc loader, so it works on SteamOS without `python3-tk`), and packs it with the
 static AppImage type-2 runtime. The stage step refuses to pack any `eboot.bin`, `.dat`, `.pkg`,
 `.tex`, save or shader-cache file.

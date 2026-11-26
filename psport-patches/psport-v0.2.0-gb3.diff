@@ -46,6 +46,230 @@ index aeebc2d..271fe39 100644
  std::atomic<const Title*> s_p_launched{nullptr};
  std::atomic<const Profile*> s_p_active{nullptr};
  } // namespace
+diff --git a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2.cpp b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2.cpp
+index f4f1b80..3edbc22 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2.cpp
++++ b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2.cpp
+@@ -562,6 +562,7 @@ s32 PS4_SYSV_ABI sceNpMatching2SignalingGetConnectionStatus(OrbisNpMatching2Cont
+         LOG_ERROR(Lib_NpMatching2, "invalid context id");
+         return ORBIS_NP_MATCHING2_ERROR_INVALID_CONTEXT_ID;
+     }
++    std::scoped_lock peers_lock{ctx->peers_mutex};
+ 
+     constexpr s32 kInactive = 0;
+     constexpr s32 kPending = 1;
+diff --git a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.cpp b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.cpp
+index 999d110..b1fa980 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.cpp
++++ b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.cpp
+@@ -64,6 +64,7 @@ void ReserveExternalRoomPayloadStorage(CallbackPayload& p, const Reply& resp) {
+ 
+ void BuildCreateJoinRoomPayloadCommon(ContextObject& ctx,
+                                       const shadnet::CreateJoinRoomResponse& resp) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     CallbackPayload& p = RequestPayload(ctx);
+     const auto& rd = resp.room_data();
+ 
+@@ -326,6 +327,7 @@ void* BuildCreateJoinRoomPayloadA(ContextObject& ctx, const shadnet::CreateJoinR
+ }
+ 
+ void* BuildLeaveRoomPayload(ContextObject& ctx, const shadnet::LeaveRoomReply& resp) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     CallbackPayload& p = RequestPayload(ctx);
+     p.Reset();
+ 
+@@ -951,6 +953,7 @@ void* BuildGetUserInfoListPayloadA(ContextObject& ctx, const shadnet::GetUserInf
+ }
+ 
+ void* BuildGetRoomDataInternalPayload(ContextObject& ctx, OrbisNpMatching2RoomId room_id) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     const auto rc_it = ctx.room_cache.find(room_id);
+     if (rc_it == ctx.room_cache.end()) {
+         return nullptr;
+diff --git a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.h b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.h
+index cd8d6b0..b464f84 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.h
++++ b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_internal.h
+@@ -244,6 +244,9 @@ struct ContextObject {
+     std::map<OrbisNpMatching2RoomMemberId, PeerInfo> peers;
+ 
+     std::map<OrbisNpMatching2RoomId, RoomCache> room_cache;
++    // peers and room_cache: the handshake thread walks them while the server's replies and room
++    // events change them.
++    mutable std::recursive_mutex peers_mutex;
+ 
+     CallbackPayload request_payload;
+     CallbackPayload* request_payload_override = nullptr;
+diff --git a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_mm.cpp b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_mm.cpp
+index dcfaf03..3c1a5c9 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_mm.cpp
++++ b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_mm.cpp
+@@ -346,6 +346,7 @@ void HandleRoomEvent(const ShadNet::NotifyRoomEvent& n) {
+     if (!ctx) {
+         return;
+     }
++    std::scoped_lock peers_lock{ctx->peers_mutex};
+     const auto event = static_cast<OrbisNpMatching2Event>(n.event);
+     const auto cause = static_cast<OrbisNpMatching2EventCause>(n.event_cause);
+     const auto room_id = static_cast<OrbisNpMatching2RoomId>(n.room_id);
+@@ -579,6 +580,7 @@ void HandleRoomMessage(const ShadNet::NotifyRoomMessage& n) {
+     if (!ctx) {
+         return;
+     }
++    std::scoped_lock peers_lock{ctx->peers_mutex};
+ 
+     const auto room_id = static_cast<OrbisNpMatching2RoomId>(n.room_id);
+     const auto src_member_id = static_cast<OrbisNpMatching2RoomMemberId>(n.src_member_id);
+@@ -1253,7 +1255,11 @@ int BbscReplayRoomMembers(bool announce_left) {
+     const auto now = std::chrono::steady_clock::now();
+     for (u32 id = 1; id <= ContextManager::kMaxContexts; ++id) {
+         ContextObject* ctx = ContextManager::Instance().Get(static_cast<OrbisNpMatching2ContextId>(id));
+-        if (!ctx || ctx->room_id == 0) {
++        if (!ctx) {
++            continue;
++        }
++        std::scoped_lock peers_lock{ctx->peers_mutex};
++        if (ctx->room_id == 0) {
+             continue;
+         }
+         const auto room_it = ctx->room_cache.find(ctx->room_id);
+diff --git a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_signaling.cpp b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_signaling.cpp
+index a75c426..f7de676 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_signaling.cpp
++++ b/gpu/net/shadps4/core/libraries/np/np_matching2/np_matching2_signaling.cpp
+@@ -269,6 +269,7 @@ bool ResolvePeerEndpointUnremembered(const MemberCache& member, PeerInfo& peer)
+ 
+ void MarkMatching2PeerActive(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+                              OrbisNpMatching2RoomMemberId member_id, u32 addr, u16 port) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     if (member_id == 0 || member_id == ctx.my_member_id) {
+         return;
+     }
+@@ -298,6 +299,7 @@ void MarkMatching2PeerActive(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+ bool SendMatching2Handshake(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+                             OrbisNpMatching2RoomMemberId member_id, Matching2HandshakeKind kind,
+                             u64 nonce) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     auto room_it = ctx.room_cache.find(room_id);
+     if (room_it == ctx.room_cache.end()) {
+         return false;
+@@ -367,6 +369,7 @@ void HandleMatching2HandshakePacket(u32 from_addr, u16 from_port,
+                   pkt.room_id, pkt.to_member_id);
+         return;
+     }
++    std::scoped_lock peers_lock{ctx->peers_mutex};
+ 
+     const auto room_id = static_cast<OrbisNpMatching2RoomId>(pkt.room_id);
+     const auto member_id = static_cast<OrbisNpMatching2RoomMemberId>(pkt.from_member_id);
+@@ -442,6 +445,7 @@ void Matching2HandshakeThreadMain() {
+             if (!ctx) {
+                 continue;
+             }
++            std::scoped_lock peers_lock{ctx->peers_mutex};
+             if (should_stun_ping) {
+                 SendMatching2StunPing(*ctx);
+             }
+@@ -530,6 +534,7 @@ void QueueMatching2SignalingEvent(ContextObject& ctx, OrbisNpMatching2RoomId roo
+ 
+ void StartMatching2PeerHandshake(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+                                  OrbisNpMatching2RoomMemberId member_id) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     auto room_it = ctx.room_cache.find(room_id);
+     if (room_it == ctx.room_cache.end() ||
+         !ShouldConnectToPeer(room_it->second, ctx.my_member_id, member_id)) {
+@@ -560,6 +565,7 @@ void StartMatching2PeerHandshake(ContextObject& ctx, OrbisNpMatching2RoomId room
+ }
+ 
+ void StartMatching2SignalingForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId room_id) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     const auto room_it = ctx.room_cache.find(room_id);
+     if (room_it == ctx.room_cache.end()) {
+         return;
+@@ -571,6 +577,7 @@ void StartMatching2SignalingForRoomPeers(ContextObject& ctx, OrbisNpMatching2Roo
+ 
+ void QueueMatching2DeadForRoomPeers(ContextObject& ctx, OrbisNpMatching2RoomId room_id,
+                                     s32 error_code) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     auto room_it = ctx.room_cache.find(room_id);
+     if (room_it == ctx.room_cache.end()) {
+         return;
+@@ -615,6 +622,7 @@ void StopMatching2HandshakeThread() {
+ }
+ 
+ u32 GetRoomPingUs(const ContextObject& ctx, OrbisNpMatching2RoomId roomId) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     const auto room_it = ctx.room_cache.find(roomId);
+     if (room_it == ctx.room_cache.end()) {
+         return 0;
+@@ -638,6 +646,7 @@ u32 GetRoomPingUs(const ContextObject& ctx, OrbisNpMatching2RoomId roomId) {
+ }
+ 
+ void* BuildSignalingGetPingInfoPayload(ContextObject& ctx, OrbisNpMatching2RoomId roomId) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     CallbackPayload& p =
+         ctx.request_payload_override ? *ctx.request_payload_override : ctx.request_payload;
+     p.Reset();
+@@ -664,6 +673,7 @@ void* BuildSignalingGetPingInfoPayload(ContextObject& ctx, OrbisNpMatching2RoomI
+ s32 FillMatching2ConnectionInfo(const ContextObject& ctx, OrbisNpMatching2RoomId roomId,
+                                 OrbisNpMatching2RoomMemberId memberId, u32 infoType, void* connInfo,
+                                 bool a_variant) {
++    std::scoped_lock peers_lock{ctx.peers_mutex};
+     if (!connInfo) {
+         LOG_ERROR(Lib_NpMatching2, "connInfo null");
+         return ORBIS_NP_MATCHING2_ERROR_INVALID_ARGUMENT;
+diff --git a/gpu/net/shadps4/core/libraries/np/np_tus.cpp b/gpu/net/shadps4/core/libraries/np/np_tus.cpp
+index 464b8c3..85eb196 100644
+--- a/gpu/net/shadps4/core/libraries/np/np_tus.cpp
++++ b/gpu/net/shadps4/core/libraries/np/np_tus.cpp
+@@ -1,10 +1,13 @@
+ // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <cstring>
++#include <filesystem>
+ #include <fstream>
+ #include <future>
+ 
+ #include "common/logging/log.h"
++#include "common/path_util.h"
+ #include "core/libraries/error_codes.h"
+ #include "core/libraries/libs.h"
+ #include "core/libraries/np/np_error.h"
+@@ -482,9 +485,32 @@ s32 PS4_SYSV_ABI sceNpTssGetDataAsync(int reqId, OrbisNpTssSlotId slotId,
+     }
+ 
+     req->Start([=]() {
++        // psport: Sony's TSS servers are gone; a slot is served from <PS_TSS_DIR | user/tss>/<slot>.txt.
++        std::string bytes;
++        std::filesystem::path path;
++        if (const char* sz_dir = std::getenv("PS_TSS_DIR"); sz_dir && sz_dir[0]) {
++            path = std::filesystem::path(sz_dir);
++        } else {
++            path = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "tss";
++        }
++        path /= std::to_string(slotId) + ".txt";
++        if (std::ifstream file{path, std::ios::binary}) {
++            bytes.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
++            LOG_INFO(Lib_NpTus, "TSS slot {}: {} bytes from {}", slotId, bytes.size(),
++                     Common::FS::PathToUTF8String(path));
++        }
++        const u64 copied = data ? std::min<u64>(bytes.size(), dataSize) : 0;
++        if (copied) {
++            std::memcpy(data, bytes.data(), copied);
++            if (copied < dataSize) {
++                static_cast<char*>(data)[copied] = '\0';
++            }
++        }
+         if (dataStatus) {
+-            dataStatus->status = OrbisNpTssStatus::Ok;
+-            dataStatus->contentLength = 0;
++            dataStatus->modified.tick = 0;
++            dataStatus->status =
++                copied < bytes.size() ? OrbisNpTssStatus::Partial : OrbisNpTssStatus::Ok;
++            dataStatus->contentLength = copied;
+         }
+         return 0;
+     });
 diff --git a/gpu/port/psport_overlay.cpp b/gpu/port/psport_overlay.cpp
 index 238738d..2d768ef 100644
 --- a/gpu/port/psport_overlay.cpp
@@ -346,10 +570,10 @@ index 77dc02b..463ddc7 100644
  static ABI int32_t pad_close(int32_t h_handle) {
      if (h_handle!=PAD_HANDLE || !s_is_opened) return ERR_INVALID_HANDLE;
 diff --git a/src/kernel/runtime_memory.c b/src/kernel/runtime_memory.c
-index 12f47d0..587ac26 100644
+index 12f47d0..ab202bb 100644
 --- a/src/kernel/runtime_memory.c
 +++ b/src/kernel/runtime_memory.c
-@@ -348,9 +348,20 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
+@@ -348,10 +348,56 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
          if (!ignore_reserved || g_p_vmas[i].kind!=KIND_RESERVED) return 1;
      return 0;
  }
@@ -359,22 +583,64 @@ index 12f47d0..587ac26 100644
 + * dereferences the NULL (guest fault at image offset 0x3c0cd2, right after a mission-end save).
 + * The image and the host-owned low arena keep their places; this only moves the heap. */
 +#define LOW_FLEXIBLE_MIN UINT64_C(0x10000000)
++/* psport's brk heap starts at a random place up to 1 GiB past the -no-pie executable, often inside
++ * this window: guest maps are MAP_FIXED, so its zone stays out of placement and a guard page ends
++ * brk there (glibc then falls back to mmap). */
++static uintptr_t s_va_heap_lo, s_va_heap_hi;
++static int find_heap(const PsHostMapping *p_mapping, void *p_context) {
++    const char *sz=p_mapping->sz_description;
++    if (sz && strstr(sz,"[heap]")) { *(uintptr_t *)p_context=p_mapping->va_begin; return 1; }
++    return 0;
++}
++static void keep_out_of_host_heap(void) {
++    uintptr_t va_heap=0;
++    ps_host_list_mappings(find_heap,&va_heap);
++    if (!va_heap) {
++        printf("Runtime: low flexible memory: no host [heap] found, nothing kept out\n");
++        return;
++    }
++    const char *sz_mb=runtime_env("PS_LOW_FLEXIBLE_HEAP_MB",NULL);
++    uint64_t mb=sz_mb ? strtoull(sz_mb,NULL,10) : 0;
++    if (mb<256 || mb>2048) mb=1024;
++    const uintptr_t va_lo=va_heap&~(uintptr_t)(PAGE-1);
++    const uintptr_t va_guard=align_up(va_lo+(mb<<20),PAGE);
++    void *p_guard=ps_host_vm_map((void *)va_guard,PAGE,PS_HOST_VM_NONE,PS_HOST_VM_EXACT|PS_HOST_VM_SPARSE);
++    s_va_heap_lo=va_lo;
++    s_va_heap_hi=va_guard+PAGE;
++    printf("Runtime: low flexible memory keeps out of the host heap %#" PRIxPTR "-%#" PRIxPTR " (guard page %s)\n",
++           s_va_heap_lo,s_va_heap_hi,p_guard==(void *)va_guard ? "set" : "not set");
++}
 +static uintptr_t flexible_floor(void) {
 +    static int s_is_low=-1;
-+    if (s_is_low<0) s_is_low=runtime_env_flag("PS_LOW_FLEXIBLE",0);
++    if (s_is_low<0) {
++        s_is_low=runtime_env_flag("PS_LOW_FLEXIBLE",0);
++        if (s_is_low) keep_out_of_host_heap();
++    }
 +    return s_is_low ? LOW_FLEXIBLE_MIN : USER_MIN;
++}
++static int hits_host_heap(uintptr_t start, uintptr_t end) {
++    return s_va_heap_hi && start<s_va_heap_hi && end>s_va_heap_lo;
 +}
  /* First-fit search in the PS4 user range, starting from the hint. */
 -static uintptr_t find_free(uintptr_t hint, uint64_t cb_range, uint64_t alignment) {
 -    uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
+-    for (size_t i=vma_index(at); at+cb_range<=USER_MAX; ++i) {
 +static uintptr_t find_free(uintptr_t hint, uint64_t cb_range, uint64_t alignment, uintptr_t floor) {
 +    uintptr_t at=align_up(hint<floor ? floor : hint, alignment);
-     for (size_t i=vma_index(at); at+cb_range<=USER_MAX; ++i) {
++    while (at+cb_range<=USER_MAX) {
++        if (hits_host_heap(at,at+cb_range)) { at=align_up(s_va_heap_hi,alignment); continue; }
++        const size_t i=vma_index(at);
          if (i==g_c_vmas || g_p_vmas[i].start>=at+cb_range) return at;
          at=align_up(g_p_vmas[i].end,alignment);
-@@ -376,7 +387,7 @@ static int32_t place_backed(void **pp_inout, uint64_t cb_range, int prot, int fl
+     }
+@@ -375,8 +421,12 @@ static int32_t place_backed(void **pp_inout, uint64_t cb_range, int prot, int fl
+     if (flags & MAP_FIXED_FLAG) {
          if (!va_range || va_range%PAGE) return INVALID;
          if ((flags & MAP_NO_OVERWRITE) && overlaps(va_range,va_range+cb_range,1)) return NO_MEMORY;
++        if (hits_host_heap(va_range,va_range+cb_range)) {
++            printf("Runtime: fixed map %#" PRIxPTR "+%#" PRIx64 " refused: the host heap is there\n",va_range,cb_range);
++            return NO_MEMORY;
++        }
      } else {
 -        va_range=find_free(va_range,cb_range,alignment);
 +        va_range=find_free(va_range,cb_range,alignment,kind==KIND_FLEXIBLE ? flexible_floor() : USER_MIN);

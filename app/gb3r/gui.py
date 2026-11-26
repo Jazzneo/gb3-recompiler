@@ -4,7 +4,7 @@ import queue
 import subprocess
 import threading
 
-from . import core
+from . import core, gui_net
 
 BG = '#11161d'
 PANEL = '#1a212b'
@@ -50,6 +50,8 @@ def main():
     style.map('Primary.TButton', background=[('active', '#f0b93a'), ('disabled', '#5a4a22')])
     style.configure('TCheckbutton', background=PANEL, foreground=FG)
     style.map('TCheckbutton', background=[('active', PANEL)])
+    style.configure('Card.TRadiobutton', background=PANEL, foreground=FG)
+    style.map('Card.TRadiobutton', background=[('active', PANEL)])
     style.configure('TEntry', fieldbackground='#0d1218', foreground=FG, insertcolor=FG)
     style.configure('TCombobox', fieldbackground='#0d1218', foreground=FG, background='#2b3542', arrowcolor=FG)
     style.map('TCombobox', fieldbackground=[('readonly', '#0d1218')], foreground=[('readonly', FG)],
@@ -164,6 +166,14 @@ def main():
     ttk.Label(c2, style='Dim.TLabel', wraplength=330,
               text='Always on: shop box lighting fix, save fix, PSN prompt skip, mission-end crash fix, F1 menu.').pack(anchor='w', pady=(8, 0))
 
+    # Network / co-op lives in its own window; this card shows the choice and opens it.
+    netrow = ttk.Frame(c1, style='Card.TFrame')
+    netrow.grid(row=6, column=0, columnspan=3, sticky='ew', pady=(18, 0))
+    net_btn = ttk.Button(netrow, text='Network / co-op…')
+    net_btn.pack(side='left')
+    net_var = tk.StringVar(value='')
+    ttk.Label(netrow, textvariable=net_var, style='Dim.TLabel', wraplength=460, justify='left').pack(side='left', padx=(10, 0))
+
     def opts():
         return {'xbox': xbox_var.get(), 'render720': r720_var.get(), 'async': async_var.get(), 'fps': fps_var.get()}
 
@@ -208,7 +218,7 @@ def main():
     # --- plumbing
     q = queue.Queue()
     state = {'busy': False, 'game': None}
-    buttons = [install_btn, play_btn, imp_btn, bak_btn, rst_btn, chk_btn]
+    buttons = [install_btn, play_btn, imp_btn, bak_btn, rst_btn, chk_btn, net_btn]
 
     def log(msg):
         q.put(msg)
@@ -236,6 +246,7 @@ def main():
             refresh()
 
     def refresh(*_):
+        net_var.set(gui_net.summary())
         inst = core.Install(dir_var.get())
         lines = core.status(dir_var.get())
         status_var.set('\n'.join(lines[1:]))
@@ -288,6 +299,13 @@ def main():
             messagebox.showinfo(core.APP_NAME, 'The game is already running.', parent=root)
             return
         remember()
+        inst = core.Install(dir_var.get())
+        sd = inst.save_dir()
+        old = None if os.path.isdir(sd) and os.listdir(sd) else core.find_old_saves(inst)
+        if old and messagebox.askyesno(core.APP_NAME, 'This install has no save yet, but one was found in\n%s\n\n'
+                                       'Copy it here before playing? (The original stays where it is.)' % old,
+                                       parent=root):
+            core.import_saves(inst, log, [os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(old))))])
         try:
             p = core.play(dir_var.get())
         except Exception as e:  # noqa: BLE001
@@ -317,6 +335,8 @@ def main():
                                       initialdir=os.path.expanduser('~/Applications'))
         run_job('Importing saves…', lambda: core.import_saves(inst, log, [src] if src else None))
 
+    net_btn.configure(command=lambda: gui_net.open_window(root, lambda: dir_var.get().strip(), log, refresh,
+                                                          (PANEL, FG, DIM)))
     install_btn.configure(command=on_install)
     play_btn.configure(command=on_play)
     rst_btn.configure(command=on_restore)

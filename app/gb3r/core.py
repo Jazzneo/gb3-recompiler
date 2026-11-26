@@ -18,7 +18,7 @@ import time
 from . import gdat
 
 APP_NAME = 'Recompiler Gundam Breaker 3 Break Edition'
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
 TITLE = 'CUSA07651'
 SAVE_TITLE = 'CUSA03489'
 
@@ -402,11 +402,43 @@ def step_runtime(inst, log):
         for fn in files:
             if fn.endswith('.sh') or fn.endswith('.py'):
                 os.chmod(os.path.join(root, fn), 0o755)
+    step_network(inst, log)
     for p in ('out/psport', 'out/psport-gpu-capabilities', 'lib/ld-linux-x86-64.so.2', 'run.sh', 'relocate.sh'):
         fp = os.path.join(inst.bundle, p)
         if os.path.exists(fp):
             os.chmod(fp, 0o755)
     fix_interp(inst, log)
+
+
+def step_network(inst, log):
+    """Co-op pieces: the local co-op server (shadnet/) and the online agreement text the game asks
+    for (user/tss/5-8.txt, kept if already there). Network mode itself is psport/gb3net.py."""
+    src = os.path.join(RUNTIME, 'shadnet')
+    if os.path.isdir(src):
+        dst = os.path.join(inst.dir, 'shadnet')
+        marker = lambda d: os.path.join(d, 'shadnet')
+        same = (os.path.exists(marker(dst)) and os.path.getsize(marker(dst)) == os.path.getsize(marker(src))
+                and file_sha256(marker(dst)) == file_sha256(marker(src)))
+        if not same:
+            if os.path.lexists(dst):
+                if os.path.isdir(dst) and not os.path.islink(dst):
+                    shutil.rmtree(dst)
+                else:
+                    os.unlink(dst)
+            _copytree(src, dst)
+            for p in ('shadnet', 'lib/ld-linux-x86-64.so.2'):
+                os.chmod(os.path.join(dst, p), 0o755)
+            log('Co-op server installed (for "Host on this device")')
+    guide = os.path.join(ROOT, 'server', 'README.md')
+    if os.path.exists(guide):
+        shutil.copy2(guide, os.path.join(inst.dir, 'server-guide.md'))
+    tss_src = os.path.join(RUNTIME, 'tss')
+    if os.path.isdir(tss_src):
+        tss = os.path.join(inst.bundle, 'user', 'tss')
+        os.makedirs(tss, exist_ok=True)
+        for fn in os.listdir(tss_src):
+            if not os.path.exists(os.path.join(tss, fn)):
+                shutil.copy2(os.path.join(tss_src, fn), os.path.join(tss, fn))
 
 
 def python_cmd():
@@ -473,7 +505,31 @@ export DATA="$here/psport-bundle" USERDIR="$here/psport-bundle/user"
 # The shop box fix GPU library carries an experimental GB3 profile; keep it off (it breaks the 720p path).
 export PS_GAME_PROFILE=${PS_GAME_PROFILE:-none}
 export PS_NO_TERMINAL=${PS_NO_TERMINAL:-1}
-%(extra)sexec bash "$here/psport/play-gb3.sh" %(args)s"$@"
+# Network mode (Recompiler window > Network: offline, local host/join or an online server). It picks
+# the server, makes sure the account (your user name) exists and exports psport's online settings.
+# Offline unless chosen there; GB3R_NET=offline skips it for one launch.
+net_setup() {
+    if [[ ${GB3R_NET:-} != offline && -f "$here/psport/gb3net.py" ]] && command -v python3 >/dev/null 2>&1; then
+        net_env=$(env -u LD_PRELOAD -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH \
+                  python3 "$here/psport/gb3net.py" launch-env --install "$here" --game-pid $$) && eval "$net_env"
+    fi
+}
+# psport sometimes dies during the first seconds of a boot (a known, random start-up crash). A crash in
+# the first %(boot)d s is retried up to %(retries)d times, so a Steam launch just starts a moment later.
+# A normal quit (exit 0), a --check run, or GB3R_RETRY=0 is never retried.
+tries=0
+while :; do
+    net_setup
+    started=$SECONDS
+    %(extra)sbash "$here/psport/play-gb3.sh" %(args)s"$@"
+    code=$?
+    if (( code == 0 || SECONDS - started >= %(boot)d || tries >= ${GB3R_RETRY:-%(retries)d} )) || [[ " $* " == *" --check "* ]]; then
+        exit $code
+    fi
+    tries=$((tries + 1))
+    echo "play.sh: the game stopped after $((SECONDS - started)) s (code $code) while starting: retry $tries" >&2
+    sleep 2
+done
 '''
 
 
@@ -487,7 +543,7 @@ def write_play(inst, opts, log):
         args.append('--uncap')
     if opts.get('async'):
         args.append('--async')
-    text = PLAY_SH % {'dir': inst.dir, 'title': TITLE, 'extra': extra,
+    text = PLAY_SH % {'dir': inst.dir, 'title': TITLE, 'extra': extra, 'boot': 45, 'retries': 2,
                       'args': ''.join(a + ' ' for a in args)}
     with open(inst.play, 'w') as f:
         f.write(text)
@@ -509,23 +565,35 @@ def write_play(inst, opts, log):
         log('Play script: %s (menu entry not written: %s)' % (inst.play, e))
 
 
+OLD_SAVE_PLACES = ['~/Applications/Psport/psport-bundle', '~/Applications/psport/psport-v0.2.0-x86_64',
+                   '~/Applications/psport/psport-bundle', '~/Games/GB3-Recompiler/psport-bundle']
+
+
+def find_old_saves(inst, sources=None):
+    """The newest save of another psport/Recompiler install (not this one), or None."""
+    found = []
+    for c in sources or OLD_SAVE_PLACES:
+        src = os.path.join(os.path.expanduser(c), 'user', 'savedata', '1', SAVE_TITLE)
+        if (os.path.isdir(src) and os.listdir(src)
+                and os.path.realpath(src) != os.path.realpath(inst.save_dir())):
+            found.append((os.path.getmtime(os.path.join(src, os.listdir(src)[0])), src))
+    return max(found)[1] if found else None
+
+
 def import_saves(inst, log, sources=None):
     """Copy saves from an older psport bundle into this install (never overwrites)."""
     dst = inst.save_dir()
     if os.path.isdir(dst) and os.listdir(dst):
         log('This install already has saves; nothing imported')
         return False
-    cands = sources or [
-        '~/Applications/Psport/psport-bundle', '~/Applications/psport/psport-v0.2.0-x86_64',
-        '~/Applications/psport/psport-bundle',
-    ]
-    for c in cands:
-        src = os.path.join(os.path.expanduser(c), 'user', 'savedata', '1', SAVE_TITLE)
-        if os.path.isdir(src) and os.listdir(src):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copytree(src, dst)
-            log('Saves copied from %s' % src)
-            return True
+    src = find_old_saves(inst, sources)
+    if src:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.isdir(dst):
+            os.rmdir(dst)                      # empty (checked above)
+        shutil.copytree(src, dst)
+        log('Saves copied from %s' % src)
+        return True
     log('No older psport saves found to import')
     return False
 
@@ -560,6 +628,9 @@ def install(folder, pkg, opts, log):
     known = check_game(inst, log)
     report(0.85, 'Installing the psport runtime')
     step_runtime(inst, log)
+    sd = inst.save_dir()
+    if not (os.path.isdir(sd) and os.listdir(sd)) and find_old_saves(inst):
+        import_saves(inst, log)               # a new install continues the player's game
     report(0.92, 'Applying the fixes and mods')
     want = step_mods(inst, opts, log, known)
     write_play(inst, opts, log)
@@ -613,6 +684,7 @@ def apply_options(folder, opts, log):
     if not inst.has_game():
         raise RuntimeError('No game installed in %s' % inst.dir)
     known = check_game(inst, log)
+    step_runtime(inst, log)          # a newer tool brings a newer runtime / co-op pieces
     want = step_mods(inst, opts, log, known)
     write_play(inst, opts, log)
     s = inst.state()
@@ -654,6 +726,12 @@ def status(folder):
             lines.append('Mods: cannot read (%s)' % e)
         xml = os.path.join(inst.bundle, 'patches', PATCH_XML)
         lines.append('720p eboot patch: %s' % ('on' if os.path.exists(xml) else 'off'))
+    try:
+        from . import net
+        c = net.load()
+        lines.append('Network: %s%s' % (net.MODE_NAMES[c['mode']], ' as %s' % c['name'] if c['mode'] != 'offline' and c['name'] else ''))
+    except Exception:  # noqa: BLE001 - status must never fail
+        pass
     sd = inst.save_dir()
     lines.append('Saves: %s' % (sd if os.path.isdir(sd) and os.listdir(sd) else 'none yet'))
     return lines
