@@ -188,7 +188,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
     ttk.Label(on_f, text='Server address', style='Card.TLabel').grid(row=0, column=0, sticky='w')
     server_var = tk.StringVar(value=cfg.get('server', ''))
     ttk.Entry(on_f, textvariable=server_var, width=36).grid(row=0, column=1, sticky='w', padx=(8, 0))
-    ttk.Label(on_f, text='Server key (if it has one)', style='Card.TLabel').grid(row=1, column=0, sticky='w', pady=(6, 0))
+    ttk.Label(on_f, text='Server key (only if its owner set one)', style='Card.TLabel').grid(row=1, column=0, sticky='w', pady=(6, 0))
     key_var = tk.StringVar(value=cfg.get('key', ''))
     ttk.Entry(on_f, textvariable=key_var, width=24, show='•').grid(row=1, column=1, sticky='w', padx=(8, 0), pady=(6, 0))
     ttk.Label(on_f, style='Dim.TLabel', wraplength=ww - 60, justify='left', text=(
@@ -346,7 +346,7 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         def work():
             try:
                 t = net.target(c, install_dir(), log=log)
-                net.ensure_account(t[0], t[1], c['name'], c.get('key', ''), t[2], log=log)
+                net.ensure_account(t[0], t[1], c['name'], c.get('key', '') if c['mode'] == 'online' else '', t[2], log=log)
                 msg = 'OK: %s is ready on %s (%s:%d). Press Play.' % (c['name'], t[3], t[0], t[1])
             except Exception as e:  # noqa: BLE001 - shown to the player
                 msg = 'Problem: %s' % e

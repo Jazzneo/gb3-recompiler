@@ -635,8 +635,8 @@ def server_start(install, cfg=None, until_pid=0, wait=8.0):
         script = os.path.abspath(__file__)
     argv = py + [script, 'serve', '--shadnet', shadnet_dir(install), '--data', SERVER_DATA,
                  '--port', str(int(cfg.get('lan_port') or PORT)), '--name', cfg.get('name') or socket.gethostname()]
-    if cfg.get('key'):
-        argv += ['--key', cfg['key']]
+    # No registration key on a device host: Wi-Fi/LAN or Tailscale already limits who can reach it
+    # (the "Server key" box belongs to an Online server and must not lock friends out here).
     if until_pid:
         argv += ['--until-pid', str(until_pid)]
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
@@ -717,7 +717,8 @@ def launch_env(install, game_pid, cfg=None, log=say):
         return lines
     try:
         host, port, sid, label = target(cfg, install, until_pid=game_pid, log=log)
-        password = ensure_account(host, port, name, cfg.get('key', ''), sid, log=log)
+        key = cfg.get('key', '') if cfg['mode'] == 'online' else ''
+        password = ensure_account(host, port, name, key, sid, log=log)
     except (RuntimeError, OSError) as e:
         log('co-op: %s: playing offline' % e)
         return lines
@@ -808,7 +809,7 @@ def main(argv=None):
             if not t:
                 print('offline: no account needed')
             else:
-                ensure_account(t[0], t[1], cfg['name'], cfg.get('key', ''), t[2])
+                ensure_account(t[0], t[1], cfg['name'], cfg.get('key', '') if cfg['mode'] == 'online' else '', t[2])
                 print('account %s ok on %s:%d' % (cfg['name'], t[0], t[1]))
         elif a.cmd == 'server':
             if a.action == 'start':
