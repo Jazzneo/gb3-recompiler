@@ -61,6 +61,15 @@ class Pure(unittest.TestCase):
         self.assertEqual(net.split_addr(' host:4000 '), ('host', 4000))
         self.assertEqual(net.split_addr(''), ('', 31313))
 
+    def test_pick_port_skips_taken(self):
+        busy = socket.socket()
+        busy.bind(('0.0.0.0', 0))
+        base = busy.getsockname()[1]
+        try:
+            self.assertNotEqual(net.pick_port(base), base)
+        finally:
+            busy.close()
+
     def test_proto(self):
         self.assertEqual(net._varint(300), b'\xac\x02')
         self.assertEqual(net._pb({1: 'ab', 3: '', 2: 'c'}), b'\x0a\x02ab\x12\x01c')

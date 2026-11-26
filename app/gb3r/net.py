@@ -621,6 +621,31 @@ def system_python():
     return (cmd.split('\x1f') if cmd else [sys.executable]), dict(os.environ)
 
 
+def ports_free(base):
+    """True when TCP base, base+2 and UDP base+1 can be bound here (no other server on them)."""
+    socks = []
+    try:
+        for port, kind in ((base, socket.SOCK_STREAM), (base + 2, socket.SOCK_STREAM), (base + 1, socket.SOCK_DGRAM)):
+            s = socket.socket(socket.AF_INET, kind)
+            socks.append(s)
+            s.bind(('0.0.0.0', port))
+        return True
+    except OSError:
+        return False
+    finally:
+        for s in socks:
+            s.close()
+
+
+def pick_port(want):
+    """`want`, or the next free block of three (another shadNet, e.g. an older co-op setup, may
+    already use 31313-31315). Friends still find us: the LAN/Tailscale answer carries the port."""
+    for base in [want] + [want + 10 * i for i in range(1, 20)]:
+        if ports_free(base):
+            return base
+    raise RuntimeError('no free ports for the co-op server near %d' % want)
+
+
 def server_start(install, cfg=None, until_pid=0, wait=8.0):
     """Start the local server in the background (no-op when it already runs). Returns its state."""
     st = server_running()
@@ -633,15 +658,18 @@ def server_start(install, cfg=None, until_pid=0, wait=8.0):
     script = os.path.join(install, 'psport', 'gb3net.py')
     if not os.path.exists(script):
         script = os.path.abspath(__file__)
+    want = int(cfg.get('lan_port') or PORT)
+    port = pick_port(want)
+    if port != want:
+        say('ports %d-%d are taken by another server here: the co-op server uses %d-%d' % (want, want + 2, port, port + 2))
     argv = py + [script, 'serve', '--shadnet', shadnet_dir(install), '--data', SERVER_DATA,
-                 '--port', str(int(cfg.get('lan_port') or PORT)), '--name', cfg.get('name') or socket.gethostname()]
+                 '--port', str(port), '--name', cfg.get('name') or socket.gethostname()]
     # No registration key on a device host: Wi-Fi/LAN or Tailscale already limits who can reach it
     # (the "Server key" box belongs to an Online server and must not lock friends out here).
     if until_pid:
         argv += ['--until-pid', str(until_pid)]
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                      close_fds=True, env=env)
-    port = int(cfg.get('lan_port') or PORT)
     end = time.time() + wait
     while time.time() < end:
         st = server_running()
