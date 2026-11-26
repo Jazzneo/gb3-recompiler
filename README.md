@@ -5,7 +5,24 @@
 https://www.youtube.com/watch?v=OEGjttqmqLs
 
 
-**Status:** tested by the author on Steam Deck (2026-11-25): installs from the PKG and plays.
+**Status:** tested by the author on Steam Deck (2026-11-26): installs from the PKG, boots, plays,
+and online co-op works (PC host + Steam Deck joining, missions included).
+
+## What's new in 1.2.0
+
+- **Online co-op (Network mode):** pick a user name and **Offline**, **Host on this device**,
+  **Join a host** or **Online server**. Host starts a built-in co-op server with Play. **Search**
+  finds hosts on your Wi-Fi/LAN and on Tailscale. Details in [Co-op](#co-op-network-mode-120).
+- **Play with friends anywhere over Tailscale:** **Set up Tailscale…** in the Network window
+  installs it and signs in, with a step-by-step guide.
+- **Start-up crash fixed:** about half of all boots used to crash in the first seconds (audio,
+  window or memory errors at random). The game's memory could land on psport's own heap; it now
+  keeps clear of it. 16/16 test boots OK on a Steam Deck. `play.sh` also retries a crash in the
+  first 45 s (up to 2 times).
+- **Co-op crash fixed:** a race in the online handshake (Matching2 peer list) could end a co-op
+  session after a few minutes.
+
+Already on 1.1.0? Install again over the same folder to get the fixed psport. Saves are kept.
 
 **How to play:** you need your own GUNDAM BREAKER 3 BREAK EDITION **base game, CUSA07651 v01.00**,
 as a fake-signed `.pkg` or a dumped `CUSA07651` folder (not an update PKG). Download
