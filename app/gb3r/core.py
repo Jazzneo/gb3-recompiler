@@ -548,23 +548,35 @@ def write_play(inst, opts, log):
         log('Play script: %s (menu entry not written: %s)' % (inst.play, e))
 
 
+OLD_SAVE_PLACES = ['~/Applications/Psport/psport-bundle', '~/Applications/psport/psport-v0.2.0-x86_64',
+                   '~/Applications/psport/psport-bundle', '~/Games/GB3-Recompiler/psport-bundle']
+
+
+def find_old_saves(inst, sources=None):
+    """The newest save of another psport/Recompiler install (not this one), or None."""
+    found = []
+    for c in sources or OLD_SAVE_PLACES:
+        src = os.path.join(os.path.expanduser(c), 'user', 'savedata', '1', SAVE_TITLE)
+        if (os.path.isdir(src) and os.listdir(src)
+                and os.path.realpath(src) != os.path.realpath(inst.save_dir())):
+            found.append((os.path.getmtime(os.path.join(src, os.listdir(src)[0])), src))
+    return max(found)[1] if found else None
+
+
 def import_saves(inst, log, sources=None):
     """Copy saves from an older psport bundle into this install (never overwrites)."""
     dst = inst.save_dir()
     if os.path.isdir(dst) and os.listdir(dst):
         log('This install already has saves; nothing imported')
         return False
-    cands = sources or [
-        '~/Applications/Psport/psport-bundle', '~/Applications/psport/psport-v0.2.0-x86_64',
-        '~/Applications/psport/psport-bundle',
-    ]
-    for c in cands:
-        src = os.path.join(os.path.expanduser(c), 'user', 'savedata', '1', SAVE_TITLE)
-        if os.path.isdir(src) and os.listdir(src):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copytree(src, dst)
-            log('Saves copied from %s' % src)
-            return True
+    src = find_old_saves(inst, sources)
+    if src:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.isdir(dst):
+            os.rmdir(dst)                      # empty (checked above)
+        shutil.copytree(src, dst)
+        log('Saves copied from %s' % src)
+        return True
     log('No older psport saves found to import')
     return False
 
@@ -599,6 +611,9 @@ def install(folder, pkg, opts, log):
     known = check_game(inst, log)
     report(0.85, 'Installing the psport runtime')
     step_runtime(inst, log)
+    sd = inst.save_dir()
+    if not (os.path.isdir(sd) and os.listdir(sd)) and find_old_saves(inst):
+        import_saves(inst, log)               # a new install continues the player's game
     report(0.92, 'Applying the fixes and mods')
     want = step_mods(inst, opts, log, known)
     write_play(inst, opts, log)

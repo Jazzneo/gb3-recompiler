@@ -299,6 +299,13 @@ def main():
             messagebox.showinfo(core.APP_NAME, 'The game is already running.', parent=root)
             return
         remember()
+        inst = core.Install(dir_var.get())
+        sd = inst.save_dir()
+        old = None if os.path.isdir(sd) and os.listdir(sd) else core.find_old_saves(inst)
+        if old and messagebox.askyesno(core.APP_NAME, 'This install has no save yet, but one was found in\n%s\n\n'
+                                       'Copy it here before playing? (The original stays where it is.)' % old,
+                                       parent=root):
+            core.import_saves(inst, log, [os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(old))))])
         try:
             p = core.play(dir_var.get())
         except Exception as e:  # noqa: BLE001
