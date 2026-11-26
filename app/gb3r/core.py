@@ -508,11 +508,28 @@ export PS_NO_TERMINAL=${PS_NO_TERMINAL:-1}
 # Network mode (Recompiler window > Network: offline, local host/join or an online server). It picks
 # the server, makes sure the account (your user name) exists and exports psport's online settings.
 # Offline unless chosen there; GB3R_NET=offline skips it for one launch.
-if [[ ${GB3R_NET:-} != offline && -f "$here/psport/gb3net.py" ]] && command -v python3 >/dev/null 2>&1; then
-    net_env=$(env -u LD_PRELOAD -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH \
-              python3 "$here/psport/gb3net.py" launch-env --install "$here" --game-pid $$) && eval "$net_env"
-fi
-%(extra)sexec bash "$here/psport/play-gb3.sh" %(args)s"$@"
+net_setup() {
+    if [[ ${GB3R_NET:-} != offline && -f "$here/psport/gb3net.py" ]] && command -v python3 >/dev/null 2>&1; then
+        net_env=$(env -u LD_PRELOAD -u LD_LIBRARY_PATH -u PYTHONHOME -u PYTHONPATH \
+                  python3 "$here/psport/gb3net.py" launch-env --install "$here" --game-pid $$) && eval "$net_env"
+    fi
+}
+# psport sometimes dies during the first seconds of a boot (a known, random start-up crash). A crash in
+# the first %(boot)d s is retried up to %(retries)d times, so a Steam launch just starts a moment later.
+# A normal quit (exit 0), a --check run, or GB3R_RETRY=0 is never retried.
+tries=0
+while :; do
+    net_setup
+    started=$SECONDS
+    %(extra)sbash "$here/psport/play-gb3.sh" %(args)s"$@"
+    code=$?
+    if (( code == 0 || SECONDS - started >= %(boot)d || tries >= ${GB3R_RETRY:-%(retries)d} )) || [[ " $* " == *" --check "* ]]; then
+        exit $code
+    fi
+    tries=$((tries + 1))
+    echo "play.sh: the game stopped after $((SECONDS - started)) s (code $code) while starting: retry $tries" >&2
+    sleep 2
+done
 '''
 
 
@@ -526,7 +543,7 @@ def write_play(inst, opts, log):
         args.append('--uncap')
     if opts.get('async'):
         args.append('--async')
-    text = PLAY_SH % {'dir': inst.dir, 'title': TITLE, 'extra': extra,
+    text = PLAY_SH % {'dir': inst.dir, 'title': TITLE, 'extra': extra, 'boot': 45, 'retries': 2,
                       'args': ''.join(a + ' ' for a in args)}
     with open(inst.play, 'w') as f:
         f.write(text)
