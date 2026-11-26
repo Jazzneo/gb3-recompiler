@@ -729,6 +729,14 @@ def target(cfg, install=None, until_pid=0, log=say):
     ip = resolve(host)
     if not ip:
         raise RuntimeError('cannot resolve %s' % host)
+    if ':' not in cfg.get('server', ''):
+        hit = discover(0.8, only=ip)          # a Recompiler host answers with its real port
+        if hit:
+            return ip, hit[0]['port'], hit[0]['id'], hit[0]['name'] or host
+    if is_tailscale_ip(ip) and not tailscale_ip():
+        raise RuntimeError('%s is a Tailscale address, but Tailscale is not on on this device' % ip)
+    if not tcp_open(ip, port, 4.0):
+        raise RuntimeError('no answer from %s:%d (is the server on, and is that its address?)' % (ip, port))
     return ip, port, '', host
 
 
