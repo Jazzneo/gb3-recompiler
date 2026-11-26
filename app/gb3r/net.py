@@ -283,7 +283,7 @@ def discover(wait=1.5, only=None):
         if only and ip != only:
             ip = addr[0]
         found[str(info['id']) if info.get('id') else (ip, int(info.get('port', PORT)))] = {
-            'ip': ip, 'port': int(info.get('port', PORT)),
+            'ip': ip, 'port': int(info.get('port', PORT)), 'game_ip': str(info.get('ip') or ''),
             'name': str(info.get('name', ''))[:32], 'id': str(info.get('id', ''))[:40]}
         if only:
             break
@@ -527,7 +527,7 @@ def _write_server_cfg(data, port, key, public):
     return open(sid).read().strip()
 
 
-def serve(shadnet, data, port=PORT, key='', name='', beacon=True, relay=True, until_pid=0):
+def serve(shadnet, data, port=PORT, key='', name='', beacon=True, relay=True, until_pid=0, advertise=''):
     """Run shadNet (+ LAN beacon, + relay) in the foreground until stopped or `until_pid` exits."""
     shadnet = os.path.abspath(shadnet)
     exe, loader = os.path.join(shadnet, 'shadnet'), os.path.join(shadnet, 'lib', 'ld-linux-x86-64.so.2')
@@ -564,7 +564,9 @@ def serve(shadnet, data, port=PORT, key='', name='', beacon=True, relay=True, un
     extras = []
     if beacon:
         try:
-            b = Beacon({'name': name or socket.gethostname(), 'port': port, 'id': sid, 'ip': lan_ip()})
+            # 'ip' = the address the host's own game uses: joiners must use the same network
+            # (Wi-Fi/LAN or Tailscale), or the peer addresses the server hands out do not match.
+            b = Beacon({'name': name or socket.gethostname(), 'port': port, 'id': sid, 'ip': advertise or lan_ip()})
             b.start()
             extras.append('LAN discovery udp %d' % BEACON_PORT)
         except OSError as e:
@@ -577,7 +579,8 @@ def serve(shadnet, data, port=PORT, key='', name='', beacon=True, relay=True, un
             say('relay off: %s' % e)
     _write_json(SERVER_STATE if data == SERVER_DATA else os.path.join(data, 'serve.json'),
                 {'pid': os.getpid(), 'shadnet_pid': child.pid, 'port': port, 'id': sid, 'name': name,
-                 'started': time.strftime('%Y-%m-%d %H:%M:%S'), 'until_pid': until_pid})
+                 'started': time.strftime('%Y-%m-%d %H:%M:%S'), 'until_pid': until_pid,
+                 'advertise': advertise})
     say('co-op server on tcp %d, udp %d, http %d%s (data %s)' % (
         port, port + 1, port + 2, ''.join(', ' + e for e in extras), data))
     while not stop.is_set() and child.poll() is None:
@@ -648,10 +651,13 @@ def pick_port(want):
 
 def server_start(install, cfg=None, until_pid=0, wait=8.0):
     """Start the local server in the background (no-op when it already runs). Returns its state."""
+    cfg = cfg or load()
     st = server_running()
     if st:
-        return st
-    cfg = cfg or load()
+        if st.get('advertise', '') in ('', host_address(cfg)):
+            return st
+        say('"Friends join over" changed: restarting the co-op server')
+        server_stop()
     os.makedirs(SERVER_DATA, exist_ok=True)
     log = open(os.path.join(SERVER_DATA, 'serve.log'), 'ab')
     py, env = system_python()
@@ -663,7 +669,8 @@ def server_start(install, cfg=None, until_pid=0, wait=8.0):
     if port != want:
         say('ports %d-%d are taken by another server here: the co-op server uses %d-%d' % (want, want + 2, port, port + 2))
     argv = py + [script, 'serve', '--shadnet', shadnet_dir(install), '--data', SERVER_DATA,
-                 '--port', str(port), '--name', cfg.get('name') or socket.gethostname()]
+                 '--port', str(port), '--name', cfg.get('name') or socket.gethostname(),
+                 '--advertise', host_address(cfg)]
     # No registration key on a device host: Wi-Fi/LAN or Tailscale already limits who can reach it
     # (the "Server key" box belongs to an Online server and must not lock friends out here).
     if until_pid:
@@ -714,7 +721,9 @@ def target(cfg, install=None, until_pid=0, log=say):
             if not ip:
                 raise RuntimeError('cannot find host %s' % host)
             hit = discover(1.0, only=ip)
-            return ip, (hit[0]['port'] if hit else port), (hit[0]['id'] if hit else ''), host
+            if hit:
+                return _same_network(hit[0], log) + (hit[0]['id'], host)
+            return ip, port, '', host
         hosts = discover_all(2.0)
         if not hosts:
             raise RuntimeError('no co-op host found on this network or on Tailscale '
@@ -722,7 +731,7 @@ def target(cfg, install=None, until_pid=0, log=say):
         h = hosts[0]
         if len(hosts) > 1:
             log('%d hosts found, using %s (%s); pick one in the Network window to change' % (len(hosts), h['name'], h['ip']))
-        return h['ip'], h['port'], h['id'], h['name']
+        return _same_network(h, log) + (h['id'], h['name'])
     host, port = split_addr(cfg.get('server'))
     if not host:
         raise RuntimeError('no online server address set')
@@ -738,6 +747,21 @@ def target(cfg, install=None, until_pid=0, log=say):
     if not tcp_open(ip, port, 4.0):
         raise RuntimeError('no answer from %s:%d (is the server on, and is that its address?)' % (ip, port))
     return ip, port, '', host
+
+
+def _same_network(h, log=say):
+    """(ip, port) to join host `h` on: the network its own game is on (its beacon says which), so the
+    addresses the server gives both players are reachable from the other side."""
+    ip, port, game_ip = h['ip'], h['port'], h.get('game_ip') or ''
+    if game_ip and game_ip != ip:
+        if tcp_open(game_ip, port, 2.0):
+            log('host %s plays on %s: joining there too (not %s)' % (h.get('name') or ip, game_ip, ip))
+            return game_ip, port
+        raise RuntimeError('host %s plays on %s (%s), which this device cannot reach; ask the host to set '
+                           '"Friends join over" to %s' % (h.get('name') or ip, game_ip,
+                                                          'Tailscale' if is_tailscale_ip(game_ip) else 'Wi-Fi/LAN',
+                                                          'Tailscale' if is_tailscale_ip(ip) else 'Wi-Fi/LAN'))
+    return ip, port
 
 
 def launch_env(install, game_pid, cfg=None, log=say):
@@ -810,6 +834,7 @@ def main(argv=None):
     p.add_argument('--no-beacon', action='store_true')
     p.add_argument('--no-relay', action='store_true')
     p.add_argument('--until-pid', type=int, default=0)
+    p.add_argument('--advertise', default='')
     p = sub.add_parser('launch-env')
     p.add_argument('--install', required=True)
     p.add_argument('--game-pid', type=int, default=0)
@@ -860,7 +885,8 @@ def main(argv=None):
             if a.key_file and os.path.isfile(a.key_file):
                 with open(a.key_file) as f:
                     a.key = f.read().strip()
-            return serve(a.shadnet, a.data, a.port, a.key, a.name, not a.no_beacon, not a.no_relay, a.until_pid)
+            return serve(a.shadnet, a.data, a.port, a.key, a.name, not a.no_beacon, not a.no_relay, a.until_pid,
+                         a.advertise)
         elif a.cmd == 'launch-env':
             print('\n'.join(launch_env(a.install, a.game_pid, cfg)))
         return 0
