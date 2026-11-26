@@ -2,7 +2,7 @@
 
 <a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
 
-
+https://www.youtube.com/watch?v=OEGjttqmqLs
 
 
 **Status:** tested by the author on Steam Deck (2026-11-25): installs from the PKG and plays.
