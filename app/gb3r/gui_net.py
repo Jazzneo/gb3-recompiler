@@ -145,13 +145,86 @@ def open_window(root, install_dir, log, on_saved=None, styles=None):
         'example: 203.0.113.7  or  gb3.example.net:31313. A free server takes about 15 minutes on '
         'Oracle Cloud\'s Always Free tier: one command, see the guide.')).grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 4))
 
-    def open_guide():
-        for p in (os.path.join(core.ROOT, 'server', 'README.md'),
-                  os.path.join(install_dir(), 'server-guide.md')):
+    def readable(md):
+        # Markdown, joined into paragraphs and without ** / ` marks, for the plain text view.
+        import re
+        out, code = [], False
+        for line in md.splitlines():
+            if line.strip().startswith('```'):
+                code = not code
+                out.append('')
+                continue
+            if code:
+                out.append('    ' + line.strip())
+                continue
+            text = re.sub(r'\*\*|`|(?<!\w)\*(?=\S)|(?<=\S)\*(?!\w)', '', line)
+            starts_item = re.match(r'\s*([-|#]|\d+\.)', text) or not text.strip()
+            if out and out[-1].strip() and not starts_item and not out[-1].startswith('    ') \
+                    and not out[-1].lstrip().startswith(('|', '#')):
+                out[-1] += ' ' + text.strip()
+            else:
+                out.append(text.rstrip())
+        return '\n'.join(out)
+
+    def guide_text():
+        for p in (os.path.join(core.ROOT, 'server', 'README.md'), os.path.join(install_dir(), 'server-guide.md')):
             if os.path.exists(p):
-                subprocess.Popen(['xdg-open', p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return
-        messagebox.showinfo('Network', 'The guide is server/README.md in the release.', parent=w)
+                with open(p, encoding='utf-8', errors='replace') as fh:
+                    return fh.read()
+        return 'The guide is server/README.md in the release.'
+
+    def open_in_browser(text):
+        # A small HTML copy in the install folder, opened with an environment free of the
+        # AppImage's own libraries (xdg-open and the browser are the system's).
+        import html
+        path = os.path.join(install_dir(), 'server-guide.html')
+        body = html.escape(text)
+        try:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('<!doctype html><meta charset="utf-8"><title>GB3 free co-op server</title>'
+                         '<body style="background:#11161d;color:#e6edf3;font:16px sans-serif;max-width:60em;margin:2em auto">'
+                         '<pre style="white-space:pre-wrap;font:15px/1.5 monospace">%s</pre>' % body)
+            subprocess.Popen(['xdg-open', path], env=core.game_env(), stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            messagebox.showinfo('Network', 'Could not open a browser (%s). The guide is in\n%s' % (e, path), parent=w)
+
+    def open_guide():
+        # Shown right here: works on every system, also without a browser or a .md viewer.
+        text = guide_text()
+        g = tk.Toplevel(w)
+        g.title('Free online server guide')
+        g.configure(background=PANEL)
+        g.transient(w)
+        g.geometry('%dx%d+%d+%d' % (ww, wh, max(0, (sw - ww) // 2), max(0, (sh - wh) // 3)))
+        gf = ttk.Frame(g, style='Card.TFrame', padding=12)
+        gf.pack(fill='both', expand=True)
+        gf.rowconfigure(0, weight=1)
+        gf.columnconfigure(0, weight=1)
+        t = tk.Text(gf, background='#0b1016', foreground='#c9d1d9', relief='flat', wrap='word',
+                    font=('DejaVu Sans Mono', 11), padx=10, pady=8)
+        t.grid(row=0, column=0, sticky='nsew')
+        sb = ttk.Scrollbar(gf, command=t.yview)
+        sb.grid(row=0, column=1, sticky='ns')
+        t.configure(yscrollcommand=sb.set)
+        t.insert('1.0', readable(text))
+        t.configure(state='disabled')
+        gb = ttk.Frame(gf, style='Card.TFrame')
+        gb.grid(row=1, column=0, columnspan=2, sticky='e', pady=(8, 0))
+        def copy_cmds():
+            import re
+            blocks = re.findall(r'```bash\n(.*?)```', text, re.S)
+            cmds = '\n'.join(l.strip() for b in blocks for l in b.splitlines() if l.strip())
+            g.clipboard_clear()
+            g.clipboard_append(cmds)
+            copied.set('Install commands copied: paste them into the server\'s terminal.')
+        copied = tk.StringVar()
+        ttk.Label(gb, textvariable=copied, style='Dim.TLabel').pack(side='left', padx=(0, 10))
+        ttk.Button(gb, text='Copy install commands', command=copy_cmds).pack(side='left')
+        ttk.Button(gb, text='Open in web browser', command=lambda: open_in_browser(text)).pack(side='left', padx=(8, 0))
+        ttk.Button(gb, text='Close', command=g.destroy).pack(side='left', padx=(8, 0))
+        g.grab_set()
+
     ttk.Button(on_f, text='Free server guide…', command=open_guide).grid(row=3, column=0, sticky='w')
 
     panels = {'lan-host': host_f, 'lan-join': join_f, 'online': on_f}
